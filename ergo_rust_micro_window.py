@@ -184,7 +184,7 @@ def get_service_uptime_seconds() -> int | None:
             _systemd_uptime_command(),
         ]
     else:
-        cmd = ["bash", "-lc", _systemd_uptime_command()]
+        cmd = ["bash", "-c", _systemd_uptime_command()]
 
     try:
         result = subprocess.run(
