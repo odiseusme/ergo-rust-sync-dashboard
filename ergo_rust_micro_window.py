@@ -389,7 +389,7 @@ class MicroWindow:
         self.config = config
         self.root = tk.Tk()
         self.root.title("ergo-node-rust sync")
-        self.root.minsize(640, 560)
+        self.root.minsize(640, 480)
 
         self.theme_name = config["theme"] if config.get("theme") in THEMES else "dark"
         self.theme = THEMES[self.theme_name]
@@ -467,10 +467,6 @@ class MicroWindow:
             self.hero_state_label.configure(foreground=state_color)
 
         self._redraw_ring(self.hero_state_key, self.hero_progress)
-        if hasattr(self, "bar_tip_canvas"):
-            self._draw_bar(self.bar_tip_canvas)
-        if hasattr(self, "bar_headers_canvas"):
-            self._draw_bar(self.bar_headers_canvas)
 
         if hasattr(self, "theme_toggle_button"):
             self.theme_toggle_button.configure(text=self._theme_toggle_label())
@@ -579,18 +575,6 @@ class MicroWindow:
             font=(self.font_sans, 12),
         )
         style.configure(
-            "BarLabel.TLabel",
-            background=t["bg_window"],
-            foreground=t["text_muted"],
-            font=(self.font_sans, 11),
-        )
-        style.configure(
-            "BarValue.TLabel",
-            background=t["bg_window"],
-            foreground=t["text_primary"],
-            font=(self.font_mono, 11),
-        )
-        style.configure(
             "Footer.TLabel",
             background=t["bg_window"],
             foreground=t["text_muted"],
@@ -665,7 +649,6 @@ class MicroWindow:
         self._build_hero(outer)
         self._build_rust_grid(outer)
         self._build_reference(outer)
-        self._build_progress(outer)
         self._build_footer(outer)
 
     def _build_rust_grid(self, parent: tk.Widget) -> None:
@@ -742,109 +725,6 @@ class MicroWindow:
         self.ref_stale_label = ttk.Label(
             inline, text="unavailable", style="RefInlineSlow.TLabel",
         )
-
-    def _build_progress(self, parent: tk.Widget) -> None:
-        """Progress section: two slim Canvas bars at the bottom."""
-        ttk.Label(
-            parent, text="Progress", style="SectionLabel.TLabel",
-        ).pack(anchor="w", pady=(16, 8))
-
-        container = ttk.Frame(parent, style="Root.TFrame")
-        container.pack(fill="x", expand=True, padx=4)
-
-        self.progress_tip_percent = 0.0
-        self.progress_headers_percent = 0.0
-
-        # Size the label column to whichever label is wider on this display.
-        # A fixed 130px column clipped "vs network tip" to "vs networ..." when
-        # the resolved sans family rendered wider than expected.
-        bar_font = tkfont.Font(family=self.font_sans, size=11)
-        label_width = max(
-            bar_font.measure("vs network tip"),
-            bar_font.measure("vs known headers"),
-        ) + 16
-        value_width = 64  # enough for "100.00%" in 11pt mono
-
-        self.bar_tip_canvas, self.bar_tip_value = self._build_bar_row(
-            container, "vs network tip", accent=True,
-            label_width=label_width, value_width=value_width,
-        )
-        self.bar_headers_canvas, self.bar_headers_value = self._build_bar_row(
-            container, "vs known headers", accent=False,
-            label_width=label_width, value_width=value_width,
-        )
-
-    def _build_bar_row(
-        self,
-        parent: tk.Widget,
-        label_text: str,
-        accent: bool,
-        label_width: int,
-        value_width: int,
-    ) -> tuple[tk.Canvas, ttk.Label]:
-        row = ttk.Frame(parent, style="Root.TFrame")
-        row.pack(fill="x", expand=True, pady=4)
-
-        label_wrap = tk.Frame(
-            row, width=label_width, height=14,
-            bg=self.theme["bg_window"], bd=0, highlightthickness=0,
-        )
-        self._track_themed(label_wrap, "bg_window")
-        label_wrap.pack(side="left")
-        label_wrap.pack_propagate(False)
-        ttk.Label(label_wrap, text=label_text, style="BarLabel.TLabel").pack(anchor="w")
-
-        # Pack the value BEFORE the canvas so the canvas's expand=True only
-        # absorbs the middle slice. The reverse order can let the canvas
-        # claim the full remaining width and push the value past the right
-        # edge.
-        value_wrap = tk.Frame(
-            row, width=value_width, height=14,
-            bg=self.theme["bg_window"], bd=0, highlightthickness=0,
-        )
-        self._track_themed(value_wrap, "bg_window")
-        value_wrap.pack(side="right")
-        value_wrap.pack_propagate(False)
-        value = ttk.Label(value_wrap, text="—", style="BarValue.TLabel", anchor="e")
-        value.pack(side="right")
-
-        canvas = tk.Canvas(
-            row, height=6, bg=self.theme["bg_window"],
-            bd=0, highlightthickness=0,
-        )
-        self._track_themed(canvas, "bg_window")
-        canvas.pack(side="left", fill="x", expand=True, padx=(0, 12))
-        canvas._accent = accent  # type: ignore[attr-defined]
-        canvas.bind("<Configure>", lambda e, c=canvas: self._draw_bar(c))
-
-        return canvas, value
-
-    def _draw_bar(self, canvas: tk.Canvas) -> None:
-        """Repaint a single bar; safe to call any time."""
-        accent = bool(getattr(canvas, "_accent", False))
-        percent = (
-            self.progress_tip_percent if accent else self.progress_headers_percent
-        )
-        width = max(1, canvas.winfo_width())
-        height = 6
-        t = self.theme
-
-        canvas.configure(bg=t["bg_window"])
-        canvas.delete("all")
-        canvas.create_rectangle(0, 0, width, height, fill=t["track"], outline="")
-
-        fill_color = t["accent"] if accent else t["text_muted"]
-        fill_w = int(width * max(0.0, min(percent / 100.0, 1.0)))
-        if fill_w > 0:
-            canvas.create_rectangle(0, 0, fill_w, height, fill=fill_color, outline="")
-
-    def _redraw_progress_bars(self, percent_tip: float, percent_headers: float) -> None:
-        self.progress_tip_percent = max(0.0, min(percent_tip, 100.0))
-        self.progress_headers_percent = max(0.0, min(percent_headers, 100.0))
-        if hasattr(self, "bar_tip_canvas"):
-            self._draw_bar(self.bar_tip_canvas)
-        if hasattr(self, "bar_headers_canvas"):
-            self._draw_bar(self.bar_headers_canvas)
 
     def _build_footer(self, parent: tk.Widget) -> None:
         """Footer: small refresh-cadence status line."""
@@ -970,7 +850,7 @@ class MicroWindow:
         self.root.update_idletasks()
 
         width = max(640, self.root.winfo_reqwidth())
-        height = max(560, self.root.winfo_reqheight())
+        height = max(480, self.root.winfo_reqheight())
 
         screen_width = self.root.winfo_screenwidth() - 80
         screen_height = self.root.winfo_screenheight() - 80
@@ -1057,7 +937,6 @@ class MicroWindow:
         uptime_seconds = snapshot.get("uptime_seconds")
 
         rust_full = int(rust.get("fullHeight") or 0)
-        rust_headers = int(rust.get("headersHeight") or 0)
         ref_full = int(ref.get("fullHeight") or 0) if isinstance(ref, dict) else 0
         behind = max(ref_full - rust_full, 0) if ref_full else 0
 
@@ -1066,7 +945,6 @@ class MicroWindow:
         self._render_hero(rust, ref, uptime_seconds, ref_error)
         self._render_rust(rust, uptime_seconds, behind)
         self._render_reference(ref, ref_error)
-        self._render_progress(rust_full, rust_headers, ref_full)
 
     def _render_hero(
         self,
@@ -1184,19 +1062,6 @@ class MicroWindow:
             label.configure(text=text, style=style)
         else:
             label.configure(text="—", style="RefInlineMuted.TLabel")
-
-    def _render_progress(self, rust_full: int, rust_headers: int, ref_full: int) -> None:
-        progress_headers = (rust_full / rust_headers * 100.0) if rust_headers else 0.0
-        progress_tip = (rust_full / ref_full * 100.0) if ref_full else 0.0
-
-        self._redraw_progress_bars(progress_tip, progress_headers)
-
-        self.bar_tip_value.configure(
-            text=f"{progress_tip:.2f}%" if ref_full else "—"
-        )
-        self.bar_headers_value.configure(
-            text=f"{progress_headers:.2f}%" if rust_headers else "—"
-        )
 
     def _apply_refresh_error(self, error: str) -> None:
         self.refresh_in_flight = False
