@@ -154,6 +154,72 @@ def parse_boolish(value: Any) -> bool | None:
     return None
 
 
+def compute_health_state(
+    rust: dict[str, Any] | None,
+    ref: dict[str, Any] | None,
+    uptime_seconds: int | None,
+    ref_error: str | None,
+    blocks_per_min: float | None,
+    peers_min: int = 1,
+) -> tuple[str, str, str, float]:
+    """Classify node health into one of five states.
+
+    Returns (state_key, state_label, state_subtitle, progress_percent).
+    state_key is one of: offline, starting, synced, slow, syncing.
+    First match wins; the order matters.
+    """
+    # 1. offline — no data from the Rust API
+    if not isinstance(rust, dict) or rust.get("fullHeight") is None:
+        return ("offline", "Offline", "unable to reach API", 0.0)
+
+    rust_full = int(rust.get("fullHeight") or 0)
+    peers = int(rust.get("peersCount") or 0)
+
+    ref_full = int(ref.get("fullHeight") or 0) if isinstance(ref, dict) else 0
+    behind = max(ref_full - rust_full, 0) if ref_full else 0
+
+    progress = 0.0
+    if ref_full:
+        progress = max(0.0, min(rust_full / ref_full * 100.0, 100.0))
+
+    # 2. starting — too early to score
+    if (uptime_seconds is not None and uptime_seconds < 60) or blocks_per_min is None:
+        return ("starting", "Starting", f"warming up · {peers} peers", progress)
+
+    # 3. slow — disconnected, or trailing the tip without speed to recover
+    if peers < peers_min:
+        return (
+            "slow",
+            "Slow",
+            f"{peers} peers · not connected",
+            progress,
+        )
+    if behind > 5 and blocks_per_min < 5:
+        return (
+            "slow",
+            "Slow",
+            f"behind {fmt_int(behind)} blocks · {fmt_rate(blocks_per_min)}",
+            progress,
+        )
+
+    # 4. synced — within touching distance of the tip (requires a reference)
+    if ref_full and behind <= 5:
+        return (
+            "synced",
+            "Synced",
+            f"block {fmt_int(rust_full)} · {peers} peers",
+            100.0,
+        )
+
+    # 5. syncing — fallback
+    return (
+        "syncing",
+        "Syncing",
+        f"{progress:.2f}% to tip · eta {fmt_eta(behind, blocks_per_min)} · {peers} peers · {fmt_rate(blocks_per_min)}",
+        progress,
+    )
+
+
 def detect_extraindex(info: dict[str, Any]) -> tuple[str, str]:
     for key in ("extraIndex", "extra_index"):
         if key in info:
