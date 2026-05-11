@@ -179,7 +179,7 @@ def get_service_uptime_seconds() -> int | None:
         cmd = [
             "ssh",
             "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=2",
+            "-o", "ConnectTimeout=5",
             SSH_HOST_FOR_UPTIME,
             _systemd_uptime_command(),
         ]
@@ -193,7 +193,7 @@ def get_service_uptime_seconds() -> int | None:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=4 if SSH_HOST_FOR_UPTIME else 2,
+            timeout=8 if SSH_HOST_FOR_UPTIME else 2,
         )
         return _parse_systemd_uptime_output(result.stdout)
     except Exception:
@@ -519,7 +519,7 @@ class MicroWindow:
         ref = None
         ref_error = None
         try:
-            ref = fetch_json(REFERENCE_URL)
+            ref = fetch_json(REFERENCE_URL, timeout=5)
         except Exception as e:
             ref_error = str(e)
 
