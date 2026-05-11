@@ -435,7 +435,6 @@ class MicroWindow:
         style.configure("Root.TFrame", background=t["bg_window"])
         style.configure("Header.TFrame", background=t["bg_window"])
         style.configure("Hero.TFrame", background=t["bg_window"])
-        style.configure("Group.TFrame", background=t["bg_card"], relief="flat")
         style.configure("Card.TFrame", background=t["bg_card"], relief="flat")
 
         style.configure(
@@ -450,102 +449,54 @@ class MicroWindow:
             foreground=t["text_secondary"],
             font=(self.font_sans, 12),
         )
-
         style.configure(
-            "Title.TLabel",
+            "SectionLabel.TLabel",
             background=t["bg_window"],
+            foreground=t["text_muted"],
+            font=(self.font_sans, 10),
+        )
+        style.configure(
+            "CardLabelV2.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_muted"],
+            font=(self.font_sans, 10),
+        )
+        style.configure(
+            "CardValueMono.TLabel",
+            background=t["bg_card"],
             foreground=t["text_primary"],
-            font=("Sans", 18, "bold"),
+            font=(self.font_mono, 14),
         )
         style.configure(
-            "RustTitle.TLabel",
-            background=t["bg_window"],
-            foreground=t["accent"],
-            font=("Sans", 18, "bold"),
+            "CardValueText.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_primary"],
+            font=(self.font_sans, 14),
         )
+        style.configure(
+            "CardValueMuted.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_muted"],
+            font=(self.font_sans, 14),
+        )
+        style.configure(
+            "CardValueAccent.TLabel",
+            background=t["bg_card"],
+            foreground=t["accent"],
+            font=(self.font_sans, 14),
+        )
+        style.configure(
+            "CardValueSlow.TLabel",
+            background=t["bg_card"],
+            foreground=t["state_slow"],
+            font=(self.font_sans, 14),
+        )
+
         style.configure(
             "Sub.TLabel",
             background=t["bg_window"],
             foreground=t["text_secondary"],
-            font=("Sans", 9),
-        )
-        style.configure(
-            "GroupTitle.TLabel",
-            background=t["bg_card"],
-            foreground=t["accent"],
-            font=("Sans", 12, "bold"),
-        )
-        style.configure(
-            "GroupSub.TLabel",
-            background=t["bg_card"],
-            foreground=t["text_secondary"],
-            font=("Sans", 9),
-        )
-        style.configure(
-            "StatusOk.TLabel",
-            background=t["bg_window"],
-            foreground=t["state_synced"],
-            font=("Sans", 12, "bold"),
-        )
-        style.configure(
-            "StatusBad.TLabel",
-            background=t["bg_window"],
-            foreground=t["state_slow"],
-            font=("Sans", 12, "bold"),
-        )
-        style.configure(
-            "CardLabel.TLabel",
-            background=t["bg_card"],
-            foreground=t["text_muted"],
-            font=("Sans", 8),
-        )
-        style.configure(
-            "CardValue.TLabel",
-            background=t["bg_card"],
-            foreground=t["text_primary"],
-            font=("Sans", 14, "bold"),
-        )
-        style.configure(
-            "CardValueSmall.TLabel",
-            background=t["bg_card"],
-            foreground=t["text_primary"],
-            font=("Sans", 11, "bold"),
-        )
-        style.configure(
-            "Ok.TLabel",
-            background=t["bg_card"],
-            foreground=t["state_synced"],
-            font=("Sans", 14, "bold"),
-        )
-        style.configure(
-            "Blue.TLabel",
-            background=t["bg_card"],
-            foreground=t["text_secondary"],
-            font=("Sans", 14, "bold"),
-        )
-        style.configure(
-            "BlueBig.TLabel",
-            background=t["bg_card"],
-            foreground=t["text_secondary"],
-            font=("Sans", 17, "bold"),
-        )
-        style.configure(
-            "BlueSmall.TLabel",
-            background=t["bg_card"],
-            foreground=t["text_secondary"],
-            font=("Sans", 11, "bold"),
-        )
-        style.configure(
-            "Rust.TLabel",
-            background=t["bg_card"],
-            foreground=t["accent"],
-            font=("Sans", 14, "bold"),
-        )
-        style.configure(
-            "Bad.TLabel",
-            background=t["bg_card"],
-            foreground=t["state_slow"],
-            font=("Sans", 14, "bold"),
+            font=(self.font_sans, 11),
         )
         style.configure(
             "Horizontal.TProgressbar",
@@ -562,14 +513,22 @@ class MicroWindow:
             font=("Sans", 9),
         )
 
-    def _card(self, parent: tk.Widget, row: int, col: int, label: str, small: bool = False, colspan: int = 1) -> ttk.Label:
-        frame = ttk.Frame(parent, style="Card.TFrame", padding=(9, 7))
+    def _card(
+        self,
+        parent: tk.Widget,
+        row: int,
+        col: int,
+        label: str,
+        mono: bool = True,
+        colspan: int = 1,
+    ) -> ttk.Label:
+        frame = ttk.Frame(parent, style="Card.TFrame", padding=(12, 10))
         frame.grid(row=row, column=col, columnspan=colspan, sticky="nsew", padx=4, pady=4)
 
-        ttk.Label(frame, text=label, style="CardLabel.TLabel").pack(anchor="w")
-        value_style = "CardValueSmall.TLabel" if small else "CardValue.TLabel"
+        ttk.Label(frame, text=label, style="CardLabelV2.TLabel").pack(anchor="w")
+        value_style = "CardValueMono.TLabel" if mono else "CardValueText.TLabel"
         value = ttk.Label(frame, text="—", style=value_style)
-        value.pack(anchor="w", pady=(2, 0))
+        value.pack(anchor="w", pady=(4, 0))
         return value
 
     def _build_ui(self) -> None:
@@ -589,51 +548,8 @@ class MicroWindow:
         ).pack(side="right")
 
         self._build_hero(outer)
-
-        body = ttk.Frame(outer, style="Root.TFrame")
-        body.pack(fill="both", expand=True)
-        body.columnconfigure(0, weight=3)
-        body.columnconfigure(1, weight=2)
-
-        rust_group = ttk.Frame(body, style="Group.TFrame", padding=10)
-        rust_group.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        rust_group.columnconfigure(0, weight=1)
-        rust_group.columnconfigure(1, weight=1)
-        rust_group.columnconfigure(2, weight=1)
-
-        ref_group = ttk.Frame(body, style="Group.TFrame", padding=10)
-        ref_group.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-        ref_group.columnconfigure(0, weight=1)
-        ref_group.columnconfigure(1, weight=1)
-
-        ttk.Label(rust_group, text="RUST NODE", style="GroupTitle.TLabel").grid(
-            row=0, column=0, columnspan=3, sticky="w", pady=(0, 4)
-        )
-
-        self.full_height = self._card(rust_group, 1, 0, "Full")
-        self.headers = self._card(rust_group, 1, 1, "Headers")
-        self.downloaded = self._card(rust_group, 1, 2, "Downloaded")
-
-        self.peers = self._card(rust_group, 2, 0, "Peers")
-        self.mempool = self._card(rust_group, 2, 1, "Mempool")
-        self.uptime = self._card(rust_group, 2, 2, "Uptime", small=True)
-
-        self.mining = self._card(rust_group, 3, 0, "Mining")
-        self.extraindex = self._card(rust_group, 3, 1, "ExtraIndex")
-        self.version = self._card(rust_group, 3, 2, "Version", small=True)
-
-        self.rate = self._card(rust_group, 4, 0, "Speed", small=True)
-        self.eta = self._card(rust_group, 4, 1, "ETA to tip", small=True)
-        self.node_kind = self._card(rust_group, 4, 2, "Role", small=True)
-
-        ttk.Label(ref_group, text="REFERENCE NODE", style="GroupTitle.TLabel").grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 4)
-        )
-
-        self.reference_height = self._card(ref_group, 1, 0, "Height", colspan=2)
-        self.reference_source = self._card(ref_group, 2, 0, "Source", small=True, colspan=2)
-        self.reference_version = self._card(ref_group, 3, 0, "Version", small=True, colspan=2)
-        self.reference_name = self._card(ref_group, 4, 0, "Name", small=True, colspan=2)
+        self._build_rust_grid(outer)
+        self._build_reference(outer)
 
         bars = ttk.Frame(outer, style="Root.TFrame")
         bars.pack(fill="x", pady=(8, 0))
@@ -659,6 +575,48 @@ class MicroWindow:
             style="Horizontal.TProgressbar",
         )
         self.ref_progress.pack(fill="x", pady=(2, 0))
+
+    def _build_rust_grid(self, parent: tk.Widget) -> None:
+        """Rust node section: section label + 3x3 card grid."""
+        ttk.Label(
+            parent, text="Rust node", style="SectionLabel.TLabel",
+        ).pack(anchor="w", pady=(16, 8))
+
+        grid = ttk.Frame(parent, style="Root.TFrame")
+        grid.pack(fill="x")
+        for c in range(3):
+            grid.columnconfigure(c, weight=1, uniform="rustcol")
+
+        # Row 1: Full / Headers / Downloaded
+        self.full_height = self._card(grid, 0, 0, "Full")
+        self.headers = self._card(grid, 0, 1, "Headers")
+        self.downloaded = self._card(grid, 0, 2, "Downloaded")
+
+        # Row 2: Peers / Mempool / Uptime
+        self.peers = self._card(grid, 1, 0, "Peers")
+        self.mempool = self._card(grid, 1, 1, "Mempool")
+        self.uptime = self._card(grid, 1, 2, "Uptime", mono=False)
+
+        # Row 3: Mining / Extra index / Version
+        self.mining = self._card(grid, 2, 0, "Mining", mono=False)
+        self.extraindex = self._card(grid, 2, 1, "Extra index", mono=False)
+        self.version = self._card(grid, 2, 2, "Version", mono=False)
+
+    def _build_reference(self, parent: tk.Widget) -> None:
+        """Reference node section. Compact card form for this commit."""
+        ttk.Label(
+            parent, text="Reference node", style="SectionLabel.TLabel",
+        ).pack(anchor="w", pady=(16, 8))
+
+        grid = ttk.Frame(parent, style="Root.TFrame")
+        grid.pack(fill="x")
+        for c in range(2):
+            grid.columnconfigure(c, weight=1, uniform="refcol")
+
+        self.reference_height = self._card(grid, 0, 0, "Height", colspan=2)
+        self.reference_source = self._card(grid, 1, 0, "Source", mono=False, colspan=2)
+        self.reference_version = self._card(grid, 2, 0, "Version", mono=False, colspan=2)
+        self.reference_name = self._card(grid, 3, 0, "Name", mono=False, colspan=2)
 
     def _build_hero(self, parent: tk.Widget) -> None:
         """Hero zone: large ring + state label + subtitle."""
@@ -781,7 +739,7 @@ class MicroWindow:
     def _toggle_top(self) -> None:
         self.root.attributes("-topmost", bool(self.always_on_top.get()))
 
-    def _set_label(self, label: ttk.Label, text: str, style: str = "CardValue.TLabel") -> None:
+    def _set_label(self, label: ttk.Label, text: str, style: str = "CardValueMono.TLabel") -> None:
         label.configure(text=text, style=style)
 
     def _update_rate(self, full_height: int) -> None:
@@ -892,41 +850,55 @@ class MicroWindow:
         rust_downloaded = int(rust.get("downloadedHeight") or 0)
         peers = int(rust.get("peersCount") or 0)
         mempool = int(rust.get("unconfirmedCount") or 0)
-        extraindex_label, extraindex_style = detect_extraindex(rust)
 
-        self._set_label(self.full_height, fmt_int(rust_full))
-        self._set_label(self.headers, fmt_int(rust_headers))
-        self._set_label(self.downloaded, fmt_int(rust_downloaded))
+        self._set_label(self.full_height, fmt_int(rust_full), "CardValueMono.TLabel")
+        self._set_label(self.headers, fmt_int(rust_headers), "CardValueMono.TLabel")
+        self._set_label(self.downloaded, fmt_int(rust_downloaded), "CardValueMono.TLabel")
 
-        self._set_label(self.peers, fmt_int(peers), "Ok.TLabel" if peers > 0 else "Bad.TLabel")
-        self._set_label(self.mempool, fmt_int(mempool), "Blue.TLabel" if mempool > 0 else "Ok.TLabel")
-        self._set_label(self.version, str(rust.get("appVersion", "—")), "CardValueSmall.TLabel")
+        peers_style = "CardValueMono.TLabel" if peers > 0 else "CardValueSlow.TLabel"
+        self._set_label(self.peers, fmt_int(peers), peers_style)
+        self._set_label(self.mempool, fmt_int(mempool), "CardValueMono.TLabel")
+        self._set_label(self.version, str(rust.get("appVersion", "—")), "CardValueText.TLabel")
 
+        is_mining = bool(rust.get("isMining"))
         self._set_label(
             self.mining,
-            "ON" if rust.get("isMining") else "OFF",
-            "Rust.TLabel" if rust.get("isMining") else "Ok.TLabel",
+            "On" if is_mining else "Off",
+            "CardValueAccent.TLabel" if is_mining else "CardValueMuted.TLabel",
         )
-        self._set_label(self.extraindex, extraindex_label, extraindex_style)
-        self._set_label(self.uptime, fmt_duration(uptime_seconds) if uptime_seconds is not None else "needs ssh", "BlueSmall.TLabel")
+        extraindex_label, extraindex_value_style = self._extraindex_card_style(rust)
+        self._set_label(self.extraindex, extraindex_label, extraindex_value_style)
+        self._set_label(
+            self.uptime,
+            fmt_duration(uptime_seconds) if uptime_seconds is not None else "needs ssh",
+            "CardValueText.TLabel" if uptime_seconds is not None else "CardValueMuted.TLabel",
+        )
 
-        self._set_label(self.rate, fmt_rate(self.blocks_per_min), "BlueSmall.TLabel")
-        self._set_label(self.eta, fmt_eta(behind, self.blocks_per_min), "BlueSmall.TLabel")
-        self._set_label(self.node_kind, "mining" if rust.get("isMining") else "non-mining", "CardValueSmall.TLabel")
+    @staticmethod
+    def _extraindex_card_style(rust: dict[str, Any]) -> tuple[str, str]:
+        """Map detect_extraindex output onto the new card value styles."""
+        label, _ = detect_extraindex(rust)
+        if label == "ON":
+            return ("On", "CardValueAccent.TLabel")
+        if label == "OFF":
+            return ("Off", "CardValueMuted.TLabel")
+        if label == "N/A":
+            return ("n/a", "CardValueMuted.TLabel")
+        return ("unknown", "CardValueMuted.TLabel")
 
     def _render_reference(self, ref: dict[str, Any] | None, ref_error: str | None) -> None:
         ref_label = self.config["reference_label"]
         if isinstance(ref, dict):
             ref_full = int(ref.get("fullHeight") or 0)
-            self._set_label(self.reference_height, fmt_int(ref_full), "Blue.TLabel")
-            self._set_label(self.reference_source, ref_label, "BlueSmall.TLabel")
-            self._set_label(self.reference_version, str(ref.get("appVersion", "—")), "BlueSmall.TLabel")
-            self._set_label(self.reference_name, str(ref.get("name", "reference")), "BlueSmall.TLabel")
+            self._set_label(self.reference_height, fmt_int(ref_full), "CardValueMono.TLabel")
+            self._set_label(self.reference_source, ref_label, "CardValueText.TLabel")
+            self._set_label(self.reference_version, str(ref.get("appVersion", "—")), "CardValueText.TLabel")
+            self._set_label(self.reference_name, str(ref.get("name", "reference")), "CardValueText.TLabel")
         else:
-            self._set_label(self.reference_height, "STALE", "Bad.TLabel")
-            self._set_label(self.reference_source, ref_label, "BlueSmall.TLabel")
-            self._set_label(self.reference_version, "—", "Bad.TLabel")
-            self._set_label(self.reference_name, ref_error or "unavailable", "Bad.TLabel")
+            self._set_label(self.reference_height, "—", "CardValueMuted.TLabel")
+            self._set_label(self.reference_source, ref_label, "CardValueText.TLabel")
+            self._set_label(self.reference_version, "—", "CardValueMuted.TLabel")
+            self._set_label(self.reference_name, ref_error or "unavailable", "CardValueSlow.TLabel")
 
     def _render_progress(self, rust_full: int, rust_headers: int, ref_full: int) -> None:
         progress_headers = (rust_full / rust_headers * 100.0) if rust_headers else 0.0
@@ -949,7 +921,7 @@ class MicroWindow:
         self.hero_state_label.configure(text="Offline", foreground=offline_color)
         self.hero_subtitle.configure(text=f"refresh failed: {error}")
         self._redraw_ring("offline", 0.0)
-        self._set_label(self.peers, "ERR", "Bad.TLabel")
+        self._set_label(self.peers, "err", "CardValueSlow.TLabel")
 
     def _refresh_worker(self) -> None:
         try:
