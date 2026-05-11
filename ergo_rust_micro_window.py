@@ -550,31 +550,31 @@ class MicroWindow:
         )
         style.configure(
             "RefPrefix.TLabel",
-            background=t["bg_window"],
+            background=t["bg_card"],
             foreground=t["text_muted"],
-            font=(self.font_sans, 10),
+            font=(self.font_sans, 11),
         )
         style.configure(
             "RefInlineText.TLabel",
-            background=t["bg_window"],
+            background=t["bg_card"],
             foreground=t["text_secondary"],
             font=(self.font_sans, 12),
         )
         style.configure(
             "RefInlineMono.TLabel",
-            background=t["bg_window"],
+            background=t["bg_card"],
             foreground=t["text_secondary"],
             font=(self.font_mono, 12),
         )
         style.configure(
             "RefInlineMuted.TLabel",
-            background=t["bg_window"],
+            background=t["bg_card"],
             foreground=t["text_muted"],
             font=(self.font_sans, 12),
         )
         style.configure(
             "RefInlineSlow.TLabel",
-            background=t["bg_window"],
+            background=t["bg_card"],
             foreground=t["state_slow"],
             font=(self.font_sans, 12),
         )
@@ -695,45 +695,45 @@ class MicroWindow:
         self.version = self._card(grid, 2, 2, "Version", mono=False)
 
     def _build_reference(self, parent: tk.Widget) -> None:
-        """Reference node: single inline summary line.
+        """Reference node: single-row card with an inline summary line.
 
-        Layout: [Reference] <name> · <version> · block <height> @ <source>.
-        Text segments render in sans, numbers and host strings in mono, so the
-        eye can pick out IDs without slowing on the connective text.
+        Layout: [Reference] <name> · v<version> · block <height>. Text
+        segments render in sans, the height number in mono. The source URL
+        is intentionally absent — it lives in .env and was the main cause
+        of horizontal overflow.
         """
-        row = ttk.Frame(parent, style="Root.TFrame")
-        row.pack(fill="x", pady=12)
+        card = ttk.Frame(parent, style="Card.TFrame", padding=(12, 10))
+        card.pack(fill="x", padx=4, pady=12)
+
+        # Measure the prefix at the rendered font so we never clip "Reference"
+        # — a fixed 70px column was what produced the "Refere" cut on HiDPI.
+        prefix_font = tkfont.Font(family=self.font_sans, size=11)
+        prefix_width = prefix_font.measure("Reference") + 16
 
         prefix_wrap = tk.Frame(
-            row, width=70, height=18,
-            bg=self.theme["bg_window"], bd=0, highlightthickness=0,
+            card, width=prefix_width, height=18,
+            bg=self.theme["bg_card"], bd=0, highlightthickness=0,
         )
-        self._track_themed(prefix_wrap, "bg_window")
+        self._track_themed(prefix_wrap, "bg_card")
         prefix_wrap.pack(side="left")
         prefix_wrap.pack_propagate(False)
         ttk.Label(prefix_wrap, text="Reference", style="RefPrefix.TLabel").pack(anchor="w")
 
-        inline = ttk.Frame(row, style="Root.TFrame")
+        inline = ttk.Frame(card, style="Card.TFrame")
         inline.pack(side="left", fill="x", expand=True)
-        self._ref_inline_container = inline
 
         self.ref_name_label = ttk.Label(inline, text="—", style="RefInlineMuted.TLabel")
         self.ref_sep1_label = ttk.Label(inline, text=" · ", style="RefInlineText.TLabel")
         self.ref_version_label = ttk.Label(inline, text="—", style="RefInlineMuted.TLabel")
         self.ref_sep2_label = ttk.Label(inline, text=" · block ", style="RefInlineText.TLabel")
         self.ref_height_label = ttk.Label(inline, text="—", style="RefInlineMuted.TLabel")
-        self.ref_at_label = ttk.Label(inline, text=" @ ", style="RefInlineText.TLabel")
-        self.ref_source_label = ttk.Label(inline, text="—", style="RefInlineMuted.TLabel")
 
-        # Order matters: pack each segment left-to-right.
         self._ref_segments = (
             self.ref_name_label,
             self.ref_sep1_label,
             self.ref_version_label,
             self.ref_sep2_label,
             self.ref_height_label,
-            self.ref_at_label,
-            self.ref_source_label,
         )
         for w in self._ref_segments:
             w.pack(side="left")
@@ -1155,9 +1155,6 @@ class MicroWindow:
         except Exception:
             height_text = ""
         self._set_ref_segment(self.ref_height_label, height_text, mono=True)
-
-        source_label = self.config["reference_label"]
-        self._set_ref_segment(self.ref_source_label, source_label, mono=True)
 
     def _set_ref_segment(self, label: ttk.Label, text: str, mono: bool) -> None:
         """Drive a single inline reference segment, falling back to muted '—'."""
