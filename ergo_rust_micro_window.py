@@ -132,14 +132,14 @@ def parse_boolish(value: Any) -> bool | None:
     return None
 
 
-def detect_extraindex(info: dict[str, Any]) -> str:
+def detect_extraindex(info: dict[str, Any]) -> tuple[str, str]:
     for key in ("extraIndex", "extra_index"):
         if key in info:
             parsed = parse_boolish(info[key])
             if parsed is None:
-                return "UNKNOWN"
-            return "ON" if parsed else "OFF"
-    return "N/A"
+                return ("UNKNOWN", "Blue.TLabel")
+            return ("ON", "Rust.TLabel") if parsed else ("OFF", "Ok.TLabel")
+    return ("N/A", "Blue.TLabel")
 
 
 def _parse_systemd_uptime_output(output: str) -> int | None:
@@ -574,7 +574,7 @@ class MicroWindow:
         rust_downloaded = int(rust.get("downloadedHeight") or 0)
         peers = int(rust.get("peersCount") or 0)
         mempool = int(rust.get("unconfirmedCount") or 0)
-        extraindex_value = detect_extraindex(rust)
+        extraindex_label, extraindex_style = detect_extraindex(rust)
 
         self._set_label(self.full_height, fmt_int(rust_full))
         self._set_label(self.headers, fmt_int(rust_headers))
@@ -589,11 +589,7 @@ class MicroWindow:
             "ON" if rust.get("isMining") else "OFF",
             "Rust.TLabel" if rust.get("isMining") else "Ok.TLabel",
         )
-        self._set_label(
-            self.extraindex,
-            extraindex_value,
-            "Rust.TLabel" if extraindex_value == "ON" else ("Ok.TLabel" if extraindex_value == "OFF" else "Blue.TLabel"),
-        )
+        self._set_label(self.extraindex, extraindex_label, extraindex_style)
         self._set_label(self.uptime, fmt_duration(uptime_seconds) if uptime_seconds is not None else "needs ssh", "BlueSmall.TLabel")
 
         self._set_label(self.rate, fmt_rate(self.blocks_per_min), "BlueSmall.TLabel")
