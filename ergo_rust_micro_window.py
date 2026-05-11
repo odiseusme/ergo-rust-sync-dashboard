@@ -225,8 +225,7 @@ class MicroWindow:
 
         self.root.configure(bg=self.colors["bg"])
 
-        self.always_on_top = tk.BooleanVar(value=True)
-        self.root.attributes("-topmost", True)
+        self.always_on_top = tk.BooleanVar(value=False)
 
         self.last_full_height: int | None = None
         self.last_sample_time: float | None = None
