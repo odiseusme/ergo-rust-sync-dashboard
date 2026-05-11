@@ -1,0 +1,19 @@
+# Local config
+.env
+.env.bak
+
+# Backup files
+*.bak
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Misc
+_trash/
+*.swp
+.DS_Store
+# Personal engineering principles (kept local, never public)
+dev_principles.md
+
