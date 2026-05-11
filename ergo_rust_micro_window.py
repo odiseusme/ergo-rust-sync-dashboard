@@ -26,6 +26,7 @@ Note:
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -37,25 +38,12 @@ from tkinter import ttk
 from typing import Any
 
 
-# Runtime config. Defaults support a local dashboard reading a local/tunneled node.
-NODE_URL = os.environ.get("ERGO_RUST_NODE_URL", "http://127.0.0.1:9052")
-REFERENCE_URL = os.environ.get("ERGO_RUST_REFERENCE_URL", "http://159.89.116.15:11088")
-REFERENCE_SOURCE_LABEL = os.environ.get(
-    "ERGO_RUST_REFERENCE_LABEL",
-    REFERENCE_URL.replace("http://", "").replace("https://", "").rstrip("/"),
-)
-
-REFRESH_MS = int(os.environ.get("ERGO_RUST_REFRESH_MS", "2000"))
-
 # ExtraIndex is displayed only if the node API exposes extraIndex or extra_index.
 
-# Optional: used to display Rust service uptime.
-# If empty, the display first tries local systemd, which works when the node
-# service runs on the same machine as the display.
-# For a remote node reached through an SSH tunnel, set:
-#   ERGO_RUST_UPTIME_SSH_HOST=your-host ./ergo_rust_micro_window.py
-SSH_HOST_FOR_UPTIME = os.environ.get("ERGO_RUST_UPTIME_SSH_HOST", "")
-SYSTEMD_SERVICE_NAME = os.environ.get("ERGO_RUST_SERVICE_NAME", "ergo-node-rust.service")
+# Service-uptime probing:
+# - If config["uptime_ssh_host"] is set, probe the remote host over SSH.
+# - Otherwise, try local systemd. That works when the node service runs on the
+#   same machine as the display.
 
 
 THEMES: dict[str, dict[str, str]] = {
@@ -90,16 +78,6 @@ THEMES: dict[str, dict[str, str]] = {
         "track": "#e0d8c8",
     },
 }
-
-
-def resolve_initial_theme(cli_theme: str | None = None) -> str:
-    """Resolve theme by precedence: CLI arg, env var, default."""
-    if cli_theme in THEMES:
-        return cli_theme
-    env_theme = os.environ.get("ERGO_RUST_THEME", "").strip().lower()
-    if env_theme in THEMES:
-        return env_theme
-    return "dark"
 
 
 def fetch_json(base_url: str, path: str = "/info", timeout: int = 2) -> dict[str, Any]:
@@ -202,33 +180,29 @@ def _parse_systemd_uptime_output(output: str) -> int | None:
     return int(max(0, uptime_seconds - active_enter_seconds))
 
 
-def _systemd_uptime_command() -> str:
+def _systemd_uptime_command(service_name: str) -> str:
     return (
-        f"systemctl show {SYSTEMD_SERVICE_NAME} "
+        f"systemctl show {service_name} "
         "--property=ActiveEnterTimestampMonotonic --value && "
         "cut -d' ' -f1 /proc/uptime"
     )
 
 
-def get_service_uptime_seconds() -> int | None:
-    """Return service uptime in seconds.
-
-    Behavior:
-    - If ERGO_RUST_UPTIME_SSH_HOST is set, probe the remote host over SSH.
-    - If it is not set, try local systemd. This works when the display and node
-      service run on the same machine.
-    - If local probing fails, return None; the UI renders that as "needs ssh".
-    """
-    if SSH_HOST_FOR_UPTIME:
+def get_service_uptime_seconds(ssh_host: str, service_name: str) -> int | None:
+    """Return service uptime in seconds, or None if probing failed."""
+    cmd_text = _systemd_uptime_command(service_name)
+    if ssh_host:
         cmd = [
             "ssh",
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
-            SSH_HOST_FOR_UPTIME,
-            _systemd_uptime_command(),
+            ssh_host,
+            cmd_text,
         ]
+        timeout = 8
     else:
-        cmd = ["bash", "-c", _systemd_uptime_command()]
+        cmd = ["bash", "-c", cmd_text]
+        timeout = 2
 
     try:
         result = subprocess.run(
@@ -237,20 +211,116 @@ def get_service_uptime_seconds() -> int | None:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=8 if SSH_HOST_FOR_UPTIME else 2,
+            timeout=timeout,
         )
         return _parse_systemd_uptime_output(result.stdout)
     except Exception:
         return None
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="ergo_rust_micro_window.py",
+        description="Native sync monitor for ergo-node-rust.",
+    )
+    parser.add_argument(
+        "--node-url",
+        default=None,
+        help="Rust node API URL. Overrides ERGO_RUST_NODE_URL.",
+    )
+    parser.add_argument(
+        "--reference-url",
+        default=None,
+        help="Reference Ergo node API URL. Overrides ERGO_RUST_REFERENCE_URL.",
+    )
+    parser.add_argument(
+        "--reference-label",
+        default=None,
+        help="Label shown in the UI for the reference source. Overrides ERGO_RUST_REFERENCE_LABEL.",
+    )
+    parser.add_argument(
+        "--refresh-ms",
+        type=int,
+        default=None,
+        help="Refresh interval in milliseconds. Overrides ERGO_RUST_REFRESH_MS.",
+    )
+    parser.add_argument(
+        "--uptime-ssh-host",
+        default=None,
+        help="SSH host alias used to probe remote service uptime. Overrides ERGO_RUST_UPTIME_SSH_HOST.",
+    )
+    parser.add_argument(
+        "--service-name",
+        default=None,
+        help="systemd unit name used for uptime probing. Overrides ERGO_RUST_SERVICE_NAME.",
+    )
+    parser.add_argument(
+        "--theme",
+        choices=sorted(THEMES.keys()),
+        default=None,
+        help="Initial color theme. Overrides ERGO_RUST_THEME.",
+    )
+    parser.add_argument(
+        "--peers-min",
+        type=int,
+        default=None,
+        help="Minimum healthy peer count. Below this the dashboard shows the Slow state. Overrides ERGO_RUST_PEERS_MIN.",
+    )
+    return parser.parse_args(argv)
+
+
+def load_config(args: argparse.Namespace) -> dict[str, Any]:
+    """Merge CLI args, environment variables, and built-in defaults.
+
+    Precedence: CLI > env > default.
+    """
+
+    def pick(arg_val: Any, env_key: str, default: str) -> str:
+        if arg_val is not None:
+            return str(arg_val)
+        env_val = os.environ.get(env_key, "")
+        if env_val:
+            return env_val
+        return default
+
+    node_url = pick(args.node_url, "ERGO_RUST_NODE_URL", "http://127.0.0.1:9052")
+    reference_url = pick(
+        args.reference_url, "ERGO_RUST_REFERENCE_URL", "http://159.89.116.15:11088"
+    )
+    derived_label = (
+        reference_url.replace("http://", "").replace("https://", "").rstrip("/")
+    )
+    reference_label = pick(args.reference_label, "ERGO_RUST_REFERENCE_LABEL", derived_label)
+    refresh_ms = int(pick(args.refresh_ms, "ERGO_RUST_REFRESH_MS", "2000"))
+    uptime_ssh_host = pick(args.uptime_ssh_host, "ERGO_RUST_UPTIME_SSH_HOST", "")
+    service_name = pick(args.service_name, "ERGO_RUST_SERVICE_NAME", "ergo-node-rust.service")
+    theme = pick(args.theme, "ERGO_RUST_THEME", "dark").strip().lower()
+    if theme not in THEMES:
+        theme = "dark"
+    peers_min = int(pick(args.peers_min, "ERGO_RUST_PEERS_MIN", "1"))
+    if peers_min < 0:
+        peers_min = 0
+
+    return {
+        "node_url": node_url,
+        "reference_url": reference_url,
+        "reference_label": reference_label,
+        "refresh_ms": refresh_ms,
+        "uptime_ssh_host": uptime_ssh_host,
+        "service_name": service_name,
+        "theme": theme,
+        "peers_min": peers_min,
+    }
+
+
 class MicroWindow:
-    def __init__(self, theme_name: str = "dark") -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.config = config
         self.root = tk.Tk()
         self.root.title("ergo-node-rust sync")
         self.root.minsize(660, 330)
 
-        self.theme_name = theme_name if theme_name in THEMES else "dark"
+        self.theme_name = config["theme"] if config.get("theme") in THEMES else "dark"
         self.theme = THEMES[self.theme_name]
 
         self.root.configure(bg=self.theme["bg_window"])
@@ -520,7 +590,7 @@ class MicroWindow:
             # drop). The block delta then represents catch-up, not steady-state
             # sync speed, so we reset the baseline instead of folding the burst
             # into the EWMA.
-            if delta_minutes > 3 * (REFRESH_MS / 60000.0):
+            if delta_minutes > 3 * (self.config["refresh_ms"] / 60000.0):
                 self.last_full_height = full_height
                 self.last_sample_time = now
                 return
@@ -542,7 +612,10 @@ class MicroWindow:
         """
         now = time.monotonic()
         if now - self.last_uptime_check > 15:
-            self.cached_uptime = get_service_uptime_seconds()
+            self.cached_uptime = get_service_uptime_seconds(
+                self.config["uptime_ssh_host"],
+                self.config["service_name"],
+            )
             self.last_uptime_check = now
         return self.cached_uptime
 
@@ -553,12 +626,12 @@ class MicroWindow:
         fails, the Rust node display remains live and the reference panel is
         marked stale.
         """
-        rust = fetch_json(NODE_URL)
+        rust = fetch_json(self.config["node_url"])
 
         ref = None
         ref_error = None
         try:
-            ref = fetch_json(REFERENCE_URL, timeout=5)
+            ref = fetch_json(self.config["reference_url"], timeout=5)
         except Exception as e:
             ref_error = str(e)
 
@@ -595,7 +668,7 @@ class MicroWindow:
         state_type = str(rust.get("stateType", "—")).upper()
 
         text = f"RUST OK · {network} · {state_type} · {status_suffix}"
-        if uptime_seconds is None and not SSH_HOST_FOR_UPTIME:
+        if uptime_seconds is None and not self.config["uptime_ssh_host"]:
             text += " · UPTIME ?"
 
         self.status.configure(
@@ -632,15 +705,16 @@ class MicroWindow:
         self._set_label(self.node_kind, "mining" if rust.get("isMining") else "non-mining", "CardValueSmall.TLabel")
 
     def _render_reference(self, ref: dict[str, Any] | None, ref_error: str | None) -> None:
+        ref_label = self.config["reference_label"]
         if isinstance(ref, dict):
             ref_full = int(ref.get("fullHeight") or 0)
             self._set_label(self.reference_height, fmt_int(ref_full), "Blue.TLabel")
-            self._set_label(self.reference_source, REFERENCE_SOURCE_LABEL, "BlueSmall.TLabel")
+            self._set_label(self.reference_source, ref_label, "BlueSmall.TLabel")
             self._set_label(self.reference_version, str(ref.get("appVersion", "—")), "BlueSmall.TLabel")
             self._set_label(self.reference_name, str(ref.get("name", "reference")), "BlueSmall.TLabel")
         else:
             self._set_label(self.reference_height, "STALE", "Bad.TLabel")
-            self._set_label(self.reference_source, REFERENCE_SOURCE_LABEL, "BlueSmall.TLabel")
+            self._set_label(self.reference_source, ref_label, "BlueSmall.TLabel")
             self._set_label(self.reference_version, "—", "Bad.TLabel")
             self._set_label(self.reference_name, ref_error or "unavailable", "Bad.TLabel")
 
@@ -678,14 +752,16 @@ class MicroWindow:
             self.refresh_in_flight = True
             threading.Thread(target=self._refresh_worker, daemon=True).start()
 
-        self.root.after(REFRESH_MS, self._refresh)
+        self.root.after(self.config["refresh_ms"], self._refresh)
 
     def run(self) -> None:
         self.root.mainloop()
 
 
 def main() -> None:
-    MicroWindow().run()
+    args = parse_args()
+    config = load_config(args)
+    MicroWindow(config).run()
 
 
 if __name__ == "__main__":
