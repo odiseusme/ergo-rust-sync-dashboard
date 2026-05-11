@@ -204,7 +204,6 @@ class MicroWindow:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("ergo-node-rust sync")
-        self.root.geometry("700x360")
         self.root.minsize(660, 330)
 
         self.colors = {
