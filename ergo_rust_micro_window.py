@@ -548,36 +548,35 @@ class MicroWindow:
             foreground=t["state_slow"],
             font=(self.font_sans, 14),
         )
-        style.configure("RefPanel.TFrame", background=t["bg_card"], relief="flat")
         style.configure(
-            "RefLabel.TLabel",
-            background=t["bg_card"],
+            "RefPrefix.TLabel",
+            background=t["bg_window"],
             foreground=t["text_muted"],
-            font=(self.font_sans, 11),
+            font=(self.font_sans, 10),
         )
         style.configure(
-            "RefValueMono.TLabel",
-            background=t["bg_card"],
-            foreground=t["text_primary"],
-            font=(self.font_mono, 13),
+            "RefInlineText.TLabel",
+            background=t["bg_window"],
+            foreground=t["text_secondary"],
+            font=(self.font_sans, 12),
         )
         style.configure(
-            "RefValueText.TLabel",
-            background=t["bg_card"],
-            foreground=t["text_primary"],
-            font=(self.font_sans, 13),
+            "RefInlineMono.TLabel",
+            background=t["bg_window"],
+            foreground=t["text_secondary"],
+            font=(self.font_mono, 12),
         )
         style.configure(
-            "RefValueMuted.TLabel",
-            background=t["bg_card"],
+            "RefInlineMuted.TLabel",
+            background=t["bg_window"],
             foreground=t["text_muted"],
-            font=(self.font_sans, 13),
+            font=(self.font_sans, 12),
         )
         style.configure(
-            "RefValueSlow.TLabel",
-            background=t["bg_card"],
+            "RefInlineSlow.TLabel",
+            background=t["bg_window"],
             foreground=t["state_slow"],
-            font=(self.font_sans, 13),
+            font=(self.font_sans, 12),
         )
         style.configure(
             "BarLabel.TLabel",
@@ -696,37 +695,53 @@ class MicroWindow:
         self.version = self._card(grid, 2, 2, "Version", mono=False)
 
     def _build_reference(self, parent: tk.Widget) -> None:
-        """Reference node section: compact list panel."""
-        ttk.Label(
-            parent, text="Reference node", style="SectionLabel.TLabel",
-        ).pack(anchor="w", pady=(16, 8))
+        """Reference node: single inline summary line.
 
-        panel = ttk.Frame(parent, style="RefPanel.TFrame")
-        panel.pack(fill="x")
-        panel.columnconfigure(0, weight=0)
-        panel.columnconfigure(1, weight=1)
+        Layout: [Reference] <name> · <version> · block <height> @ <source>.
+        Text segments render in sans, numbers and host strings in mono, so the
+        eye can pick out IDs without slowing on the connective text.
+        """
+        row = ttk.Frame(parent, style="Root.TFrame")
+        row.pack(fill="x", pady=12)
 
-        self.reference_height = self._ref_row(panel, 0, "Height", mono=True)
-        self._ref_separator(panel, 1)
-        self.reference_source = self._ref_row(panel, 2, "Source")
-        self._ref_separator(panel, 3)
-        self.reference_version = self._ref_row(panel, 4, "Version")
-        self._ref_separator(panel, 5)
-        self.reference_name = self._ref_row(panel, 6, "Name")
-
-    def _ref_row(self, parent: tk.Widget, row: int, label: str, mono: bool = False) -> ttk.Label:
-        ttk.Label(parent, text=label, style="RefLabel.TLabel").grid(
-            row=row, column=0, sticky="w", padx=(14, 12), pady=10,
+        prefix_wrap = tk.Frame(
+            row, width=70, height=18,
+            bg=self.theme["bg_window"], bd=0, highlightthickness=0,
         )
-        value_style = "RefValueMono.TLabel" if mono else "RefValueText.TLabel"
-        value = ttk.Label(parent, text="—", style=value_style, anchor="e")
-        value.grid(row=row, column=1, sticky="e", padx=(0, 14), pady=10)
-        return value
+        self._track_themed(prefix_wrap, "bg_window")
+        prefix_wrap.pack(side="left")
+        prefix_wrap.pack_propagate(False)
+        ttk.Label(prefix_wrap, text="Reference", style="RefPrefix.TLabel").pack(anchor="w")
 
-    def _ref_separator(self, parent: tk.Widget, row: int) -> None:
-        sep = tk.Frame(parent, height=1, bg=self.theme["border"], bd=0, highlightthickness=0)
-        self._track_themed(sep, "border")
-        sep.grid(row=row, column=0, columnspan=2, sticky="ew")
+        inline = ttk.Frame(row, style="Root.TFrame")
+        inline.pack(side="left", fill="x", expand=True)
+        self._ref_inline_container = inline
+
+        self.ref_name_label = ttk.Label(inline, text="—", style="RefInlineMuted.TLabel")
+        self.ref_sep1_label = ttk.Label(inline, text=" · ", style="RefInlineText.TLabel")
+        self.ref_version_label = ttk.Label(inline, text="—", style="RefInlineMuted.TLabel")
+        self.ref_sep2_label = ttk.Label(inline, text=" · block ", style="RefInlineText.TLabel")
+        self.ref_height_label = ttk.Label(inline, text="—", style="RefInlineMuted.TLabel")
+        self.ref_at_label = ttk.Label(inline, text=" @ ", style="RefInlineText.TLabel")
+        self.ref_source_label = ttk.Label(inline, text="—", style="RefInlineMuted.TLabel")
+
+        # Order matters: pack each segment left-to-right.
+        self._ref_segments = (
+            self.ref_name_label,
+            self.ref_sep1_label,
+            self.ref_version_label,
+            self.ref_sep2_label,
+            self.ref_height_label,
+            self.ref_at_label,
+            self.ref_source_label,
+        )
+        for w in self._ref_segments:
+            w.pack(side="left")
+
+        # Shown only when ref is stale; hidden initially.
+        self.ref_stale_label = ttk.Label(
+            inline, text="unavailable", style="RefInlineSlow.TLabel",
+        )
 
     def _build_progress(self, parent: tk.Widget) -> None:
         """Progress section: two slim Canvas bars at the bottom."""
@@ -1098,18 +1113,52 @@ class MicroWindow:
         return ("unknown", "CardValueMuted.TLabel")
 
     def _render_reference(self, ref: dict[str, Any] | None, ref_error: str | None) -> None:
-        ref_label = self.config["reference_label"]
-        if isinstance(ref, dict):
-            ref_full = int(ref.get("fullHeight") or 0)
-            self._set_label(self.reference_height, fmt_int(ref_full), "RefValueMono.TLabel")
-            self._set_label(self.reference_source, ref_label, "RefValueText.TLabel")
-            self._set_label(self.reference_version, str(ref.get("appVersion", "—")), "RefValueText.TLabel")
-            self._set_label(self.reference_name, str(ref.get("name", "reference")), "RefValueText.TLabel")
+        if not isinstance(ref, dict):
+            for w in self._ref_segments:
+                w.pack_forget()
+            self.ref_stale_label.configure(text="unavailable")
+            if not self.ref_stale_label.winfo_ismapped():
+                self.ref_stale_label.pack(side="left")
+            return
+
+        if self.ref_stale_label.winfo_ismapped():
+            self.ref_stale_label.pack_forget()
+        for w in self._ref_segments:
+            if not w.winfo_ismapped():
+                w.pack(side="left")
+
+        self._set_ref_segment(
+            self.ref_name_label,
+            str(ref.get("name")) if ref.get("name") else "",
+            mono=False,
+        )
+
+        version_raw = ref.get("appVersion")
+        if version_raw:
+            version_text = str(version_raw)
+            if not version_text.lower().startswith("v"):
+                version_text = f"v{version_text}"
         else:
-            self._set_label(self.reference_height, "—", "RefValueMuted.TLabel")
-            self._set_label(self.reference_source, ref_label, "RefValueText.TLabel")
-            self._set_label(self.reference_version, "—", "RefValueMuted.TLabel")
-            self._set_label(self.reference_name, ref_error or "unavailable", "RefValueSlow.TLabel")
+            version_text = ""
+        self._set_ref_segment(self.ref_version_label, version_text, mono=False)
+
+        height_raw = ref.get("fullHeight")
+        try:
+            height_text = fmt_int(height_raw) if height_raw is not None else ""
+        except Exception:
+            height_text = ""
+        self._set_ref_segment(self.ref_height_label, height_text, mono=True)
+
+        source_label = self.config["reference_label"]
+        self._set_ref_segment(self.ref_source_label, source_label, mono=True)
+
+    def _set_ref_segment(self, label: ttk.Label, text: str, mono: bool) -> None:
+        """Drive a single inline reference segment, falling back to muted '—'."""
+        if text:
+            style = "RefInlineMono.TLabel" if mono else "RefInlineText.TLabel"
+            label.configure(text=text, style=style)
+        else:
+            label.configure(text="—", style="RefInlineMuted.TLabel")
 
     def _render_progress(self, rust_full: int, rust_headers: int, ref_full: int) -> None:
         progress_headers = (rust_full / rust_headers * 100.0) if rust_headers else 0.0
