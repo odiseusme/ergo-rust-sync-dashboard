@@ -650,15 +650,15 @@ class MicroWindow:
     def _build_reference(self, parent: tk.Widget) -> None:
         """Reference node: full-width card matching the Rust card pattern.
 
-        Label on top, value below. The value is a row of labels packed
-        side-by-side so text segments render in sans while the height
-        number renders in mono. Layout:
+        Label on top, value below. The value row is justified: the block
+        height anchors the left edge (to compare with the Rust Full card
+        directly above), the node name anchors the right. Layout:
 
             Reference
-            <name> · v<version> · block <height>
+            block <height>                                   <name>
 
-        No fixed pixel widths anywhere — the card stretches with the
-        window, the inline row anchors west and uses natural label widths.
+        No fixed pixel widths anywhere — the inline row uses fill=x so
+        the empty middle absorbs slack as the window resizes.
         """
         card = ttk.Frame(parent, style="Card.TFrame", padding=(12, 10))
         card.pack(fill="x", expand=True, padx=4, pady=(8, 0))
@@ -666,23 +666,24 @@ class MicroWindow:
         ttk.Label(card, text="Reference", style="CardLabelV2.TLabel").pack(anchor="w")
 
         inline = ttk.Frame(card, style="Card.TFrame")
-        inline.pack(anchor="w", fill="x", pady=(4, 0))
+        inline.pack(fill="x", expand=True, pady=(4, 0))
 
+        # Pack the right side first so the name anchors the right edge
+        # without being squeezed by anything on the left.
         self.ref_name_label = ttk.Label(inline, text="—", style="CardValueMuted.TLabel")
-        self.ref_sep1_label = ttk.Label(inline, text=" · ", style="CardValueText.TLabel")
-        self.ref_version_label = ttk.Label(inline, text="—", style="CardValueMuted.TLabel")
-        self.ref_sep2_label = ttk.Label(inline, text=" · block ", style="CardValueText.TLabel")
-        self.ref_height_label = ttk.Label(inline, text="—", style="CardValueMuted.TLabel")
+        self.ref_name_label.pack(side="right")
 
-        self._ref_segments = (
-            self.ref_name_label,
-            self.ref_sep1_label,
-            self.ref_version_label,
-            self.ref_sep2_label,
+        self.ref_block_label = ttk.Label(inline, text="block ", style="CardValueText.TLabel")
+        self.ref_block_label.pack(side="left")
+        self.ref_height_label = ttk.Label(inline, text="—", style="CardValueMuted.TLabel")
+        self.ref_height_label.pack(side="left")
+
+        # Widgets that toggle visibility when ref goes stale.
+        self._ref_live_widgets = (
+            self.ref_block_label,
             self.ref_height_label,
+            self.ref_name_label,
         )
-        for w in self._ref_segments:
-            w.pack(side="left")
 
         # Shown only when ref is stale; hidden initially.
         self.ref_stale_label = ttk.Label(
@@ -983,7 +984,7 @@ class MicroWindow:
 
     def _render_reference(self, ref: dict[str, Any] | None, ref_error: str | None) -> None:
         if not isinstance(ref, dict):
-            for w in self._ref_segments:
+            for w in self._ref_live_widgets:
                 w.pack_forget()
             self.ref_stale_label.configure(text="unavailable")
             if not self.ref_stale_label.winfo_ismapped():
@@ -992,24 +993,19 @@ class MicroWindow:
 
         if self.ref_stale_label.winfo_ismapped():
             self.ref_stale_label.pack_forget()
-        for w in self._ref_segments:
-            if not w.winfo_ismapped():
-                w.pack(side="left")
+        # Re-pack in the original justification: right side first, then left.
+        if not self.ref_name_label.winfo_ismapped():
+            self.ref_name_label.pack(side="right")
+        if not self.ref_block_label.winfo_ismapped():
+            self.ref_block_label.pack(side="left")
+        if not self.ref_height_label.winfo_ismapped():
+            self.ref_height_label.pack(side="left")
 
         self._set_ref_segment(
             self.ref_name_label,
             str(ref.get("name")) if ref.get("name") else "",
             mono=False,
         )
-
-        version_raw = ref.get("appVersion")
-        if version_raw:
-            version_text = str(version_raw)
-            if not version_text.lower().startswith("v"):
-                version_text = f"v{version_text}"
-        else:
-            version_text = ""
-        self._set_ref_segment(self.ref_version_label, version_text, mono=False)
 
         height_raw = ref.get("fullHeight")
         try:
