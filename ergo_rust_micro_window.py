@@ -220,7 +220,7 @@ def compute_health_state(
     return (
         "syncing",
         "Syncing",
-        f"{progress:.2f}% to tip · eta {fmt_eta(behind, blocks_per_min)} · {peers} peers · {fmt_rate(blocks_per_min)}",
+        f"eta {fmt_eta(behind, blocks_per_min)}",
         progress,
     )
 
