@@ -93,6 +93,18 @@ case "$MODE" in
     if ask_yes_no "Use the same SSH host for service uptime display?" "n"; then
       UPTIME_SSH_HOST="$TUNNEL_SSH_HOST"
     fi
+
+    if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$TUNNEL_SSH_HOST" true 2>/dev/null; then
+      echo ""
+      echo "WARNING: cannot reach $TUNNEL_SSH_HOST non-interactively."
+      echo "The systemd unit requires BatchMode=yes SSH (key auth, no password)."
+      if ! ask_yes_no "Continue anyway?" "n"; then
+        echo "Aborting."
+        exit 1
+      fi
+    else
+      echo "SSH host $TUNNEL_SSH_HOST is reachable non-interactively."
+    fi
     ;;
   3)
     NODE_URL="$(ask_default "Rust node API URL" "http://127.0.0.1:9052")"
