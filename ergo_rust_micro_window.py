@@ -58,6 +58,50 @@ SSH_HOST_FOR_UPTIME = os.environ.get("ERGO_RUST_UPTIME_SSH_HOST", "")
 SYSTEMD_SERVICE_NAME = os.environ.get("ERGO_RUST_SERVICE_NAME", "ergo-node-rust.service")
 
 
+THEMES: dict[str, dict[str, str]] = {
+    "dark": {
+        "bg_window": "#1a1814",
+        "bg_card": "#252220",
+        "text_primary": "#f0eee5",
+        "text_secondary": "#b8b0a0",
+        "text_muted": "#7a7268",
+        "accent": "#d97757",
+        "state_synced": "#7ba87b",
+        "state_syncing": "#d99c5a",
+        "state_slow": "#c97870",
+        "state_offline": "#5e5852",
+        "state_starting": "#b8b0a0",
+        "border": "#2a2724",
+        "track": "#2d2a26",
+    },
+    "light": {
+        "bg_window": "#faf7f2",
+        "bg_card": "#f1ece2",
+        "text_primary": "#2a2520",
+        "text_secondary": "#5a5048",
+        "text_muted": "#8a7e72",
+        "accent": "#c45a3a",
+        "state_synced": "#4f7a4f",
+        "state_syncing": "#a8714a",
+        "state_slow": "#9a4f3e",
+        "state_offline": "#b0aa9e",
+        "state_starting": "#5a5048",
+        "border": "#ddd5c5",
+        "track": "#e0d8c8",
+    },
+}
+
+
+def resolve_initial_theme(cli_theme: str | None = None) -> str:
+    """Resolve theme by precedence: CLI arg, env var, default."""
+    if cli_theme in THEMES:
+        return cli_theme
+    env_theme = os.environ.get("ERGO_RUST_THEME", "").strip().lower()
+    if env_theme in THEMES:
+        return env_theme
+    return "dark"
+
+
 def fetch_json(base_url: str, path: str = "/info", timeout: int = 2) -> dict[str, Any]:
     url = base_url.rstrip("/") + path
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -201,28 +245,15 @@ def get_service_uptime_seconds() -> int | None:
 
 
 class MicroWindow:
-    def __init__(self) -> None:
+    def __init__(self, theme_name: str = "dark") -> None:
         self.root = tk.Tk()
         self.root.title("ergo-node-rust sync")
         self.root.minsize(660, 330)
 
-        self.colors = {
-            "bg": "#5a2413",        # reddish rust background
-            "bg2": "#3d170c",
-            "group": "#1a0f0b",
-            "card": "#25140d",
-            "line": "#8f4a24",
-            "rust": "#ff8a3d",
-            "rust2": "#d7692f",
-            "text": "#f9ead8",
-            "muted": "#c7a891",
-            "ok": "#2ff08f",
-            "blue": "#48b8ff",
-            "bad": "#ff5264",
-            "bar_bg": "#120b08",
-        }
+        self.theme_name = theme_name if theme_name in THEMES else "dark"
+        self.theme = THEMES[self.theme_name]
 
-        self.root.configure(bg=self.colors["bg"])
+        self.root.configure(bg=self.theme["bg_window"])
 
         self.always_on_top = tk.BooleanVar(value=False)
 
@@ -240,123 +271,123 @@ class MicroWindow:
         self._refresh()
 
     def _setup_style(self) -> None:
-        c = self.colors
+        t = self.theme
         style = ttk.Style()
         style.theme_use("clam")
 
-        style.configure("Root.TFrame", background=c["bg"])
-        style.configure("Header.TFrame", background=c["bg"])
-        style.configure("Group.TFrame", background=c["group"], relief="flat")
-        style.configure("Card.TFrame", background=c["card"], relief="flat")
+        style.configure("Root.TFrame", background=t["bg_window"])
+        style.configure("Header.TFrame", background=t["bg_window"])
+        style.configure("Group.TFrame", background=t["bg_card"], relief="flat")
+        style.configure("Card.TFrame", background=t["bg_card"], relief="flat")
 
         style.configure(
             "Title.TLabel",
-            background=c["bg"],
-            foreground=c["text"],
+            background=t["bg_window"],
+            foreground=t["text_primary"],
             font=("Sans", 18, "bold"),
         )
         style.configure(
             "RustTitle.TLabel",
-            background=c["bg"],
-            foreground=c["rust"],
+            background=t["bg_window"],
+            foreground=t["accent"],
             font=("Sans", 18, "bold"),
         )
         style.configure(
             "Sub.TLabel",
-            background=c["bg"],
-            foreground=c["muted"],
+            background=t["bg_window"],
+            foreground=t["text_secondary"],
             font=("Sans", 9),
         )
         style.configure(
             "GroupTitle.TLabel",
-            background=c["group"],
-            foreground=c["rust"],
+            background=t["bg_card"],
+            foreground=t["accent"],
             font=("Sans", 12, "bold"),
         )
         style.configure(
             "GroupSub.TLabel",
-            background=c["group"],
-            foreground=c["muted"],
+            background=t["bg_card"],
+            foreground=t["text_secondary"],
             font=("Sans", 9),
         )
         style.configure(
             "StatusOk.TLabel",
-            background=c["bg"],
-            foreground=c["ok"],
+            background=t["bg_window"],
+            foreground=t["state_synced"],
             font=("Sans", 12, "bold"),
         )
         style.configure(
             "StatusBad.TLabel",
-            background=c["bg"],
-            foreground=c["bad"],
+            background=t["bg_window"],
+            foreground=t["state_slow"],
             font=("Sans", 12, "bold"),
         )
         style.configure(
             "CardLabel.TLabel",
-            background=c["card"],
-            foreground=c["muted"],
+            background=t["bg_card"],
+            foreground=t["text_muted"],
             font=("Sans", 8),
         )
         style.configure(
             "CardValue.TLabel",
-            background=c["card"],
-            foreground=c["text"],
+            background=t["bg_card"],
+            foreground=t["text_primary"],
             font=("Sans", 14, "bold"),
         )
         style.configure(
             "CardValueSmall.TLabel",
-            background=c["card"],
-            foreground=c["text"],
+            background=t["bg_card"],
+            foreground=t["text_primary"],
             font=("Sans", 11, "bold"),
         )
         style.configure(
             "Ok.TLabel",
-            background=c["card"],
-            foreground=c["ok"],
+            background=t["bg_card"],
+            foreground=t["state_synced"],
             font=("Sans", 14, "bold"),
         )
         style.configure(
             "Blue.TLabel",
-            background=c["card"],
-            foreground=c["blue"],
+            background=t["bg_card"],
+            foreground=t["text_secondary"],
             font=("Sans", 14, "bold"),
         )
         style.configure(
             "BlueBig.TLabel",
-            background=c["card"],
-            foreground=c["blue"],
+            background=t["bg_card"],
+            foreground=t["text_secondary"],
             font=("Sans", 17, "bold"),
         )
         style.configure(
             "BlueSmall.TLabel",
-            background=c["card"],
-            foreground=c["blue"],
+            background=t["bg_card"],
+            foreground=t["text_secondary"],
             font=("Sans", 11, "bold"),
         )
         style.configure(
             "Rust.TLabel",
-            background=c["card"],
-            foreground=c["rust"],
+            background=t["bg_card"],
+            foreground=t["accent"],
             font=("Sans", 14, "bold"),
         )
         style.configure(
             "Bad.TLabel",
-            background=c["card"],
-            foreground=c["bad"],
+            background=t["bg_card"],
+            foreground=t["state_slow"],
             font=("Sans", 14, "bold"),
         )
         style.configure(
             "Horizontal.TProgressbar",
-            troughcolor=c["bar_bg"],
-            background=c["blue"],
-            bordercolor=c["line"],
-            lightcolor=c["blue"],
-            darkcolor=c["blue"],
+            troughcolor=t["track"],
+            background=t["accent"],
+            bordercolor=t["border"],
+            lightcolor=t["accent"],
+            darkcolor=t["accent"],
         )
         style.configure(
             "TCheckbutton",
-            background=c["bg"],
-            foreground=c["muted"],
+            background=t["bg_window"],
+            foreground=t["text_secondary"],
             font=("Sans", 9),
         )
 
