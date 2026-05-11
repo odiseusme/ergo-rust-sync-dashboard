@@ -413,6 +413,10 @@ class MicroWindow:
         self.hero_state_key: str = "starting"
         self.hero_progress: float = 0.0
 
+        # Non-ttk widgets whose `bg` follows a theme token. Each entry is
+        # (widget, theme_key); apply_theme iterates this list on swap.
+        self._themed_widgets: list[tuple[tk.Widget, str]] = []
+
         self._setup_style()
         self._build_ui()
         self._fit_window_to_content()
@@ -426,6 +430,59 @@ class MicroWindow:
             if name in available:
                 return name
         return candidates[-1]
+
+    def _track_themed(self, widget: tk.Widget, theme_key: str) -> tk.Widget:
+        """Register a non-ttk widget whose background follows a theme token.
+
+        ttk styles refresh themselves when _setup_style runs again. Plain
+        tk.Frame and tk.Canvas widgets do not — they keep whatever bg they
+        were created with — so we re-set them explicitly on theme change.
+        """
+        self._themed_widgets.append((widget, theme_key))
+        return widget
+
+    def apply_theme(self, name: str) -> None:
+        """Swap the active palette and repaint every theme-dependent surface."""
+        if name not in THEMES:
+            return
+        self.theme_name = name
+        self.theme = THEMES[name]
+        self.root.configure(bg=self.theme["bg_window"])
+
+        self._setup_style()
+
+        for widget, key in self._themed_widgets:
+            try:
+                widget.configure(bg=self.theme[key])
+            except tk.TclError:
+                pass
+
+        # Hero state label foreground is set per-state in _render_hero, so
+        # repaint it explicitly to match the new palette without waiting for
+        # the next refresh tick.
+        state_color = self.theme.get(
+            f"state_{self.hero_state_key}", self.theme["state_starting"]
+        )
+        if hasattr(self, "hero_state_label"):
+            self.hero_state_label.configure(foreground=state_color)
+
+        self._redraw_ring(self.hero_state_key, self.hero_progress)
+        if hasattr(self, "bar_tip_canvas"):
+            self._draw_bar(self.bar_tip_canvas)
+        if hasattr(self, "bar_headers_canvas"):
+            self._draw_bar(self.bar_headers_canvas)
+
+        if hasattr(self, "theme_toggle_button"):
+            self.theme_toggle_button.configure(text=self._theme_toggle_label())
+
+    def _theme_toggle_label(self) -> str:
+        """The button shows the name of the theme it would switch to."""
+        other = "light" if self.theme_name == "dark" else "dark"
+        return other.capitalize()
+
+    def _toggle_theme(self) -> None:
+        next_name = "light" if self.theme_name == "dark" else "dark"
+        self.apply_theme(next_name)
 
     def _setup_style(self) -> None:
         t = self.theme
@@ -547,6 +604,21 @@ class MicroWindow:
             foreground=t["text_secondary"],
             font=(self.font_sans, 9),
         )
+        style.configure(
+            "ThemeToggle.TButton",
+            background=t["bg_window"],
+            foreground=t["text_secondary"],
+            font=(self.font_sans, 9),
+            borderwidth=0,
+            focusthickness=0,
+            padding=(6, 2),
+            relief="flat",
+        )
+        style.map(
+            "ThemeToggle.TButton",
+            background=[("active", t["bg_card"]), ("pressed", t["bg_card"])],
+            foreground=[("active", t["text_primary"])],
+        )
 
     def _card(
         self,
@@ -573,6 +645,15 @@ class MicroWindow:
 
         top = ttk.Frame(outer, style="Header.TFrame")
         top.pack(fill="x")
+
+        self.theme_toggle_button = ttk.Button(
+            top,
+            text=self._theme_toggle_label(),
+            style="ThemeToggle.TButton",
+            command=self._toggle_theme,
+            takefocus=False,
+        )
+        self.theme_toggle_button.pack(side="right", padx=(8, 0))
 
         ttk.Checkbutton(
             top,
@@ -644,6 +725,7 @@ class MicroWindow:
 
     def _ref_separator(self, parent: tk.Widget, row: int) -> None:
         sep = tk.Frame(parent, height=1, bg=self.theme["border"], bd=0, highlightthickness=0)
+        self._track_themed(sep, "border")
         sep.grid(row=row, column=0, columnspan=2, sticky="ew")
 
     def _build_progress(self, parent: tk.Widget) -> None:
@@ -675,6 +757,7 @@ class MicroWindow:
             row, width=130, height=14,
             bg=self.theme["bg_window"], bd=0, highlightthickness=0,
         )
+        self._track_themed(label_wrap, "bg_window")
         label_wrap.pack(side="left")
         label_wrap.pack_propagate(False)
         ttk.Label(label_wrap, text=label_text, style="BarLabel.TLabel").pack(anchor="w")
@@ -683,6 +766,7 @@ class MicroWindow:
             row, height=6, bg=self.theme["bg_window"],
             bd=0, highlightthickness=0,
         )
+        self._track_themed(canvas, "bg_window")
         canvas.pack(side="left", fill="x", expand=True, padx=(0, 12))
         canvas._accent = accent  # type: ignore[attr-defined]
         canvas.bind("<Configure>", lambda e, c=canvas: self._draw_bar(c))
@@ -691,6 +775,7 @@ class MicroWindow:
             row, width=60, height=14,
             bg=self.theme["bg_window"], bd=0, highlightthickness=0,
         )
+        self._track_themed(value_wrap, "bg_window")
         value_wrap.pack(side="right")
         value_wrap.pack_propagate(False)
         value = ttk.Label(value_wrap, text="—", style="BarValue.TLabel", anchor="e")
@@ -745,6 +830,7 @@ class MicroWindow:
             highlightthickness=0,
             bd=0,
         )
+        self._track_themed(self.hero_ring, "bg_window")
         self.hero_ring.pack(side="left", padx=(0, 16))
 
         text_block = ttk.Frame(hero, style="Hero.TFrame")
@@ -774,6 +860,7 @@ class MicroWindow:
             bd=0,
             highlightthickness=0,
         )
+        self._track_themed(self.hero_separator, "border")
         self.hero_separator.pack(fill="x", pady=(0, 8))
 
         self._redraw_ring("starting", 0.0)
