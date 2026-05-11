@@ -750,32 +750,63 @@ class MicroWindow:
         ).pack(anchor="w", pady=(16, 8))
 
         container = ttk.Frame(parent, style="Root.TFrame")
-        container.pack(fill="x")
+        container.pack(fill="x", expand=True, padx=4)
 
         self.progress_tip_percent = 0.0
         self.progress_headers_percent = 0.0
 
+        # Size the label column to whichever label is wider on this display.
+        # A fixed 130px column clipped "vs network tip" to "vs networ..." when
+        # the resolved sans family rendered wider than expected.
+        bar_font = tkfont.Font(family=self.font_sans, size=11)
+        label_width = max(
+            bar_font.measure("vs network tip"),
+            bar_font.measure("vs known headers"),
+        ) + 16
+        value_width = 64  # enough for "100.00%" in 11pt mono
+
         self.bar_tip_canvas, self.bar_tip_value = self._build_bar_row(
             container, "vs network tip", accent=True,
+            label_width=label_width, value_width=value_width,
         )
         self.bar_headers_canvas, self.bar_headers_value = self._build_bar_row(
             container, "vs known headers", accent=False,
+            label_width=label_width, value_width=value_width,
         )
 
     def _build_bar_row(
-        self, parent: tk.Widget, label_text: str, accent: bool,
+        self,
+        parent: tk.Widget,
+        label_text: str,
+        accent: bool,
+        label_width: int,
+        value_width: int,
     ) -> tuple[tk.Canvas, ttk.Label]:
         row = ttk.Frame(parent, style="Root.TFrame")
-        row.pack(fill="x", pady=4)
+        row.pack(fill="x", expand=True, pady=4)
 
         label_wrap = tk.Frame(
-            row, width=130, height=14,
+            row, width=label_width, height=14,
             bg=self.theme["bg_window"], bd=0, highlightthickness=0,
         )
         self._track_themed(label_wrap, "bg_window")
         label_wrap.pack(side="left")
         label_wrap.pack_propagate(False)
         ttk.Label(label_wrap, text=label_text, style="BarLabel.TLabel").pack(anchor="w")
+
+        # Pack the value BEFORE the canvas so the canvas's expand=True only
+        # absorbs the middle slice. The reverse order can let the canvas
+        # claim the full remaining width and push the value past the right
+        # edge.
+        value_wrap = tk.Frame(
+            row, width=value_width, height=14,
+            bg=self.theme["bg_window"], bd=0, highlightthickness=0,
+        )
+        self._track_themed(value_wrap, "bg_window")
+        value_wrap.pack(side="right")
+        value_wrap.pack_propagate(False)
+        value = ttk.Label(value_wrap, text="—", style="BarValue.TLabel", anchor="e")
+        value.pack(side="right")
 
         canvas = tk.Canvas(
             row, height=6, bg=self.theme["bg_window"],
@@ -785,16 +816,6 @@ class MicroWindow:
         canvas.pack(side="left", fill="x", expand=True, padx=(0, 12))
         canvas._accent = accent  # type: ignore[attr-defined]
         canvas.bind("<Configure>", lambda e, c=canvas: self._draw_bar(c))
-
-        value_wrap = tk.Frame(
-            row, width=60, height=14,
-            bg=self.theme["bg_window"], bd=0, highlightthickness=0,
-        )
-        self._track_themed(value_wrap, "bg_window")
-        value_wrap.pack(side="right")
-        value_wrap.pack_propagate(False)
-        value = ttk.Label(value_wrap, text="—", style="BarValue.TLabel", anchor="e")
-        value.pack(side="right")
 
         return canvas, value
 
