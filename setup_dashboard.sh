@@ -204,6 +204,32 @@ EOF_DESKTOP
   echo "Created: $DESKTOP_FILE"
 fi
 
+say "Optional: autostart on login"
+if ask_yes_no "Create a user systemd unit to autostart the dashboard on login?" "n"; then
+  DASH_SVC_DIR="$HOME/.config/systemd/user"
+  DASH_SVC_FILE="$DASH_SVC_DIR/ergo-rust-sync-dashboard.service"
+  mkdir -p "$DASH_SVC_DIR"
+  cat > "$DASH_SVC_FILE" <<EOF_DASH
+[Unit]
+Description=Ergo Rust Sync Dashboard
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=$APP_DIR/run_micro_window.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=graphical-session.target
+EOF_DASH
+  systemctl --user daemon-reload
+  systemctl --user enable ergo-rust-sync-dashboard.service
+  echo "Created and enabled: ergo-rust-sync-dashboard.service"
+  echo "It will start on next login. To start now: systemctl --user start ergo-rust-sync-dashboard.service"
+fi
+
 say "Test configured Rust node API"
 if curl -fsS --max-time 5 "$NODE_URL/info" >/dev/null; then
   echo "Rust node API OK: $NODE_URL/info"
