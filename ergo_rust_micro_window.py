@@ -534,6 +534,12 @@ class MicroWindow:
             foreground=t["text_primary"],
             font=(self.font_mono, 11),
         )
+        style.configure(
+            "Footer.TLabel",
+            background=t["bg_window"],
+            foreground=t["text_muted"],
+            font=(self.font_sans, 11),
+        )
 
         style.configure(
             "TCheckbutton",
@@ -580,6 +586,7 @@ class MicroWindow:
         self._build_rust_grid(outer)
         self._build_reference(outer)
         self._build_progress(outer)
+        self._build_footer(outer)
 
     def _build_rust_grid(self, parent: tk.Widget) -> None:
         """Rust node section: section label + 3x3 card grid."""
@@ -717,6 +724,13 @@ class MicroWindow:
             self._draw_bar(self.bar_tip_canvas)
         if hasattr(self, "bar_headers_canvas"):
             self._draw_bar(self.bar_headers_canvas)
+
+    def _build_footer(self, parent: tk.Widget) -> None:
+        """Footer: small refresh-cadence status line."""
+        seconds = self.config["refresh_ms"] / 1000.0
+        text = f"auto-refresh {seconds:.0f}s"
+        self.footer_label = ttk.Label(parent, text=text, style="Footer.TLabel")
+        self.footer_label.pack(anchor="e", pady=(12, 0))
 
     def _build_hero(self, parent: tk.Widget) -> None:
         """Hero zone: large ring + state label + subtitle."""
