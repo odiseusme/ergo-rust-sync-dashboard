@@ -491,6 +491,37 @@ class MicroWindow:
             foreground=t["state_slow"],
             font=(self.font_sans, 14),
         )
+        style.configure("RefPanel.TFrame", background=t["bg_card"], relief="flat")
+        style.configure(
+            "RefLabel.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_muted"],
+            font=(self.font_sans, 11),
+        )
+        style.configure(
+            "RefValueMono.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_primary"],
+            font=(self.font_mono, 13),
+        )
+        style.configure(
+            "RefValueText.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_primary"],
+            font=(self.font_sans, 13),
+        )
+        style.configure(
+            "RefValueMuted.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_muted"],
+            font=(self.font_sans, 13),
+        )
+        style.configure(
+            "RefValueSlow.TLabel",
+            background=t["bg_card"],
+            foreground=t["state_slow"],
+            font=(self.font_sans, 13),
+        )
 
         style.configure(
             "Sub.TLabel",
@@ -603,20 +634,36 @@ class MicroWindow:
         self.version = self._card(grid, 2, 2, "Version", mono=False)
 
     def _build_reference(self, parent: tk.Widget) -> None:
-        """Reference node section. Compact card form for this commit."""
+        """Reference node section: compact list panel."""
         ttk.Label(
             parent, text="Reference node", style="SectionLabel.TLabel",
         ).pack(anchor="w", pady=(16, 8))
 
-        grid = ttk.Frame(parent, style="Root.TFrame")
-        grid.pack(fill="x")
-        for c in range(2):
-            grid.columnconfigure(c, weight=1, uniform="refcol")
+        panel = ttk.Frame(parent, style="RefPanel.TFrame")
+        panel.pack(fill="x")
+        panel.columnconfigure(0, weight=0)
+        panel.columnconfigure(1, weight=1)
 
-        self.reference_height = self._card(grid, 0, 0, "Height", colspan=2)
-        self.reference_source = self._card(grid, 1, 0, "Source", mono=False, colspan=2)
-        self.reference_version = self._card(grid, 2, 0, "Version", mono=False, colspan=2)
-        self.reference_name = self._card(grid, 3, 0, "Name", mono=False, colspan=2)
+        self.reference_height = self._ref_row(panel, 0, "Height", mono=True)
+        self._ref_separator(panel, 1)
+        self.reference_source = self._ref_row(panel, 2, "Source")
+        self._ref_separator(panel, 3)
+        self.reference_version = self._ref_row(panel, 4, "Version")
+        self._ref_separator(panel, 5)
+        self.reference_name = self._ref_row(panel, 6, "Name")
+
+    def _ref_row(self, parent: tk.Widget, row: int, label: str, mono: bool = False) -> ttk.Label:
+        ttk.Label(parent, text=label, style="RefLabel.TLabel").grid(
+            row=row, column=0, sticky="w", padx=(14, 12), pady=10,
+        )
+        value_style = "RefValueMono.TLabel" if mono else "RefValueText.TLabel"
+        value = ttk.Label(parent, text="—", style=value_style, anchor="e")
+        value.grid(row=row, column=1, sticky="e", padx=(0, 14), pady=10)
+        return value
+
+    def _ref_separator(self, parent: tk.Widget, row: int) -> None:
+        sep = tk.Frame(parent, height=1, bg=self.theme["border"], bd=0, highlightthickness=0)
+        sep.grid(row=row, column=0, columnspan=2, sticky="ew")
 
     def _build_hero(self, parent: tk.Widget) -> None:
         """Hero zone: large ring + state label + subtitle."""
@@ -890,15 +937,15 @@ class MicroWindow:
         ref_label = self.config["reference_label"]
         if isinstance(ref, dict):
             ref_full = int(ref.get("fullHeight") or 0)
-            self._set_label(self.reference_height, fmt_int(ref_full), "CardValueMono.TLabel")
-            self._set_label(self.reference_source, ref_label, "CardValueText.TLabel")
-            self._set_label(self.reference_version, str(ref.get("appVersion", "—")), "CardValueText.TLabel")
-            self._set_label(self.reference_name, str(ref.get("name", "reference")), "CardValueText.TLabel")
+            self._set_label(self.reference_height, fmt_int(ref_full), "RefValueMono.TLabel")
+            self._set_label(self.reference_source, ref_label, "RefValueText.TLabel")
+            self._set_label(self.reference_version, str(ref.get("appVersion", "—")), "RefValueText.TLabel")
+            self._set_label(self.reference_name, str(ref.get("name", "reference")), "RefValueText.TLabel")
         else:
-            self._set_label(self.reference_height, "—", "CardValueMuted.TLabel")
-            self._set_label(self.reference_source, ref_label, "CardValueText.TLabel")
-            self._set_label(self.reference_version, "—", "CardValueMuted.TLabel")
-            self._set_label(self.reference_name, ref_error or "unavailable", "CardValueSlow.TLabel")
+            self._set_label(self.reference_height, "—", "RefValueMuted.TLabel")
+            self._set_label(self.reference_source, ref_label, "RefValueText.TLabel")
+            self._set_label(self.reference_version, "—", "RefValueMuted.TLabel")
+            self._set_label(self.reference_name, ref_error or "unavailable", "RefValueSlow.TLabel")
 
     def _render_progress(self, rust_full: int, rust_headers: int, ref_full: int) -> None:
         progress_headers = (rust_full / rust_headers * 100.0) if rust_headers else 0.0
