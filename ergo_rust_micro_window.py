@@ -389,7 +389,7 @@ class MicroWindow:
         self.config = config
         self.root = tk.Tk()
         self.root.title("ergo-node-rust sync")
-        self.root.minsize(640, 680)
+        self.root.minsize(640, 560)
 
         self.theme_name = config["theme"] if config.get("theme") in THEMES else "dark"
         self.theme = THEMES[self.theme_name]
@@ -938,17 +938,24 @@ class MicroWindow:
         self.hero_progress = progress_percent
 
     def _fit_window_to_content(self) -> None:
-        """Open large enough to show all widgets without clipping."""
+        """Open the window at the size its packed children request.
+
+        Without this, Tk picks an initial geometry that can clip the
+        bottom-most widgets (Progress bars, Footer) on first paint. We let
+        every child publish its requested size first, then set the geometry
+        to that — floored at the minsize, capped at the screen size so we
+        never open larger than the display.
+        """
         self.root.update_idletasks()
 
-        requested_width = self.root.winfo_reqwidth()
-        requested_height = self.root.winfo_reqheight()
+        width = max(640, self.root.winfo_reqwidth())
+        height = max(560, self.root.winfo_reqheight())
 
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
+        screen_width = self.root.winfo_screenwidth() - 80
+        screen_height = self.root.winfo_screenheight() - 80
 
-        width = min(max(720, requested_width + 20), screen_width - 80)
-        height = min(max(520, requested_height + 20), screen_height - 80)
+        width = min(width, screen_width)
+        height = min(height, screen_height)
 
         self.root.geometry(f"{width}x{height}")
 
