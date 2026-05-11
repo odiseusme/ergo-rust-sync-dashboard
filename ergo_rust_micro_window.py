@@ -485,6 +485,15 @@ class MicroWindow:
         if self.last_full_height is not None and self.last_sample_time is not None:
             delta_blocks = full_height - self.last_full_height
             delta_minutes = (now - self.last_sample_time) / 60.0
+            # If the gap between samples is far longer than the refresh interval,
+            # this sample reflects a stall recovery (e.g. machine sleep, network
+            # drop). The block delta then represents catch-up, not steady-state
+            # sync speed, so we reset the baseline instead of folding the burst
+            # into the EWMA.
+            if delta_minutes > 3 * (REFRESH_MS / 60000.0):
+                self.last_full_height = full_height
+                self.last_sample_time = now
+                return
             if delta_blocks >= 0 and delta_minutes > 0:
                 instant = delta_blocks / delta_minutes
                 if self.blocks_per_min is None:
