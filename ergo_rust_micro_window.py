@@ -982,11 +982,21 @@ class MicroWindow:
         )
         extraindex_label, extraindex_value_style = self._extraindex_card_style(rust)
         self._set_label(self.extraindex, extraindex_label, extraindex_value_style)
-        self._set_label(
-            self.uptime,
-            fmt_duration(uptime_seconds) if uptime_seconds is not None else "needs ssh",
-            "CardValueText.TLabel" if uptime_seconds is not None else "CardValueMuted.TLabel",
-        )
+        uptime_text, uptime_style = self._uptime_card_style(uptime_seconds)
+        self._set_label(self.uptime, uptime_text, uptime_style)
+
+    def _uptime_card_style(self, uptime_seconds: int | None) -> tuple[str, str]:
+        """Pick the (text, style) for the uptime card.
+
+        The ambiguous case is uptime_seconds=None: differentiate "SSH host not
+        configured" (so we never tried) from "SSH host configured but the
+        probe failed" (so something is wrong).
+        """
+        if uptime_seconds is not None:
+            return (fmt_duration(uptime_seconds), "CardValueText.TLabel")
+        if self.config["uptime_ssh_host"]:
+            return ("probe failed", "CardValueSlow.TLabel")
+        return ("needs ssh", "CardValueMuted.TLabel")
 
     @staticmethod
     def _extraindex_card_style(rust: dict[str, Any]) -> tuple[str, str]:
