@@ -602,7 +602,7 @@ class MicroWindow:
             self._set_label(self.reference_height, fmt_int(ref_full), "Blue.TLabel")
             self._set_label(self.reference_source, REFERENCE_SOURCE_LABEL, "BlueSmall.TLabel")
             self._set_label(self.reference_version, str(ref.get("appVersion", "—")), "BlueSmall.TLabel")
-            self._set_label(self.reference_name, str(ref.get("name", "reference")).replace("mainnet-", ""), "BlueSmall.TLabel")
+            self._set_label(self.reference_name, str(ref.get("name", "reference")), "BlueSmall.TLabel")
         else:
             self._set_label(self.reference_height, "STALE", "Bad.TLabel")
             self._set_label(self.reference_source, REFERENCE_SOURCE_LABEL, "BlueSmall.TLabel")
