@@ -55,7 +55,7 @@ REFRESH_MS = int(os.environ.get("ERGO_RUST_REFRESH_MS", "2000"))
 # For a remote node reached through an SSH tunnel, set:
 #   ERGO_RUST_UPTIME_SSH_HOST=your-host ./ergo_rust_micro_window.py
 SSH_HOST_FOR_UPTIME = os.environ.get("ERGO_RUST_UPTIME_SSH_HOST", "")
-SYSTEMD_SERVICE_NAME = "ergo-node-rust.service"
+SYSTEMD_SERVICE_NAME = os.environ.get("ERGO_RUST_SERVICE_NAME", "ergo-node-rust.service")
 
 
 def fetch_json(base_url: str, path: str = "/info", timeout: int = 2) -> dict[str, Any]:
@@ -132,14 +132,14 @@ def parse_boolish(value: Any) -> bool | None:
     return None
 
 
-def detect_extraindex(info: dict[str, Any]) -> str:
+def detect_extraindex(info: dict[str, Any]) -> tuple[str, str]:
     for key in ("extraIndex", "extra_index"):
         if key in info:
             parsed = parse_boolish(info[key])
             if parsed is None:
-                return "UNKNOWN"
-            return "ON" if parsed else "OFF"
-    return "N/A"
+                return ("UNKNOWN", "Blue.TLabel")
+            return ("ON", "Rust.TLabel") if parsed else ("OFF", "Ok.TLabel")
+    return ("N/A", "Blue.TLabel")
 
 
 def _parse_systemd_uptime_output(output: str) -> int | None:
@@ -179,12 +179,12 @@ def get_service_uptime_seconds() -> int | None:
         cmd = [
             "ssh",
             "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=2",
+            "-o", "ConnectTimeout=5",
             SSH_HOST_FOR_UPTIME,
             _systemd_uptime_command(),
         ]
     else:
-        cmd = ["bash", "-lc", _systemd_uptime_command()]
+        cmd = ["bash", "-c", _systemd_uptime_command()]
 
     try:
         result = subprocess.run(
@@ -193,7 +193,7 @@ def get_service_uptime_seconds() -> int | None:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=4 if SSH_HOST_FOR_UPTIME else 2,
+            timeout=8 if SSH_HOST_FOR_UPTIME else 2,
         )
         return _parse_systemd_uptime_output(result.stdout)
     except Exception:
@@ -204,7 +204,6 @@ class MicroWindow:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("ergo-node-rust sync")
-        self.root.geometry("700x360")
         self.root.minsize(660, 330)
 
         self.colors = {
@@ -225,8 +224,7 @@ class MicroWindow:
 
         self.root.configure(bg=self.colors["bg"])
 
-        self.always_on_top = tk.BooleanVar(value=True)
-        self.root.attributes("-topmost", True)
+        self.always_on_top = tk.BooleanVar(value=False)
 
         self.last_full_height: int | None = None
         self.last_sample_time: float | None = None
@@ -486,6 +484,15 @@ class MicroWindow:
         if self.last_full_height is not None and self.last_sample_time is not None:
             delta_blocks = full_height - self.last_full_height
             delta_minutes = (now - self.last_sample_time) / 60.0
+            # If the gap between samples is far longer than the refresh interval,
+            # this sample reflects a stall recovery (e.g. machine sleep, network
+            # drop). The block delta then represents catch-up, not steady-state
+            # sync speed, so we reset the baseline instead of folding the burst
+            # into the EWMA.
+            if delta_minutes > 3 * (REFRESH_MS / 60000.0):
+                self.last_full_height = full_height
+                self.last_sample_time = now
+                return
             if delta_blocks >= 0 and delta_minutes > 0:
                 instant = delta_blocks / delta_minutes
                 if self.blocks_per_min is None:
@@ -520,7 +527,7 @@ class MicroWindow:
         ref = None
         ref_error = None
         try:
-            ref = fetch_json(REFERENCE_URL)
+            ref = fetch_json(REFERENCE_URL, timeout=5)
         except Exception as e:
             ref_error = str(e)
 
@@ -541,30 +548,37 @@ class MicroWindow:
 
         rust_full = int(rust.get("fullHeight") or 0)
         rust_headers = int(rust.get("headersHeight") or 0)
-        rust_downloaded = int(rust.get("downloadedHeight") or 0)
-        peers = int(rust.get("peersCount") or 0)
-        mempool = int(rust.get("unconfirmedCount") or 0)
-        extraindex_value = detect_extraindex(rust)
-
-        self._update_rate(rust_full)
-
         ref_full = int(ref.get("fullHeight") or 0) if isinstance(ref, dict) else 0
         behind = max(ref_full - rust_full, 0) if ref_full else 0
 
-        progress_headers = (rust_full / rust_headers * 100.0) if rust_headers else 0.0
-        progress_ref = (rust_full / ref_full * 100.0) if ref_full else 0.0
+        self._update_rate(rust_full)
 
-        progress_headers = max(0.0, min(progress_headers, 100.0))
-        progress_ref = max(0.0, min(progress_ref, 100.0))
+        self._render_status(rust, ref_error, uptime_seconds)
+        self._render_rust(rust, uptime_seconds, behind)
+        self._render_reference(ref, ref_error)
+        self._render_progress(rust_full, rust_headers, ref_full)
 
+    def _render_status(self, rust: dict[str, Any], ref_error: str | None, uptime_seconds: int | None) -> None:
         status_suffix = "REF STALE" if ref_error else "REF OK"
         network = str(rust.get("network", "—"))
         state_type = str(rust.get("stateType", "—")).upper()
 
+        text = f"RUST OK · {network} · {state_type} · {status_suffix}"
+        if uptime_seconds is None and not SSH_HOST_FOR_UPTIME:
+            text += " · UPTIME ?"
+
         self.status.configure(
-            text=f"RUST OK · {network} · {state_type} · {status_suffix}",
+            text=text,
             style="StatusOk.TLabel" if not ref_error else "StatusBad.TLabel",
         )
+
+    def _render_rust(self, rust: dict[str, Any], uptime_seconds: int | None, behind: int) -> None:
+        rust_full = int(rust.get("fullHeight") or 0)
+        rust_headers = int(rust.get("headersHeight") or 0)
+        rust_downloaded = int(rust.get("downloadedHeight") or 0)
+        peers = int(rust.get("peersCount") or 0)
+        mempool = int(rust.get("unconfirmedCount") or 0)
+        extraindex_label, extraindex_style = detect_extraindex(rust)
 
         self._set_label(self.full_height, fmt_int(rust_full))
         self._set_label(self.headers, fmt_int(rust_headers))
@@ -579,27 +593,32 @@ class MicroWindow:
             "ON" if rust.get("isMining") else "OFF",
             "Rust.TLabel" if rust.get("isMining") else "Ok.TLabel",
         )
-        self._set_label(
-            self.extraindex,
-            extraindex_value,
-            "Rust.TLabel" if extraindex_value == "ON" else ("Ok.TLabel" if extraindex_value == "OFF" else "Blue.TLabel"),
-        )
+        self._set_label(self.extraindex, extraindex_label, extraindex_style)
         self._set_label(self.uptime, fmt_duration(uptime_seconds) if uptime_seconds is not None else "needs ssh", "BlueSmall.TLabel")
 
         self._set_label(self.rate, fmt_rate(self.blocks_per_min), "BlueSmall.TLabel")
         self._set_label(self.eta, fmt_eta(behind, self.blocks_per_min), "BlueSmall.TLabel")
         self._set_label(self.node_kind, "mining" if rust.get("isMining") else "non-mining", "CardValueSmall.TLabel")
 
+    def _render_reference(self, ref: dict[str, Any] | None, ref_error: str | None) -> None:
         if isinstance(ref, dict):
+            ref_full = int(ref.get("fullHeight") or 0)
             self._set_label(self.reference_height, fmt_int(ref_full), "Blue.TLabel")
             self._set_label(self.reference_source, REFERENCE_SOURCE_LABEL, "BlueSmall.TLabel")
             self._set_label(self.reference_version, str(ref.get("appVersion", "—")), "BlueSmall.TLabel")
-            self._set_label(self.reference_name, str(ref.get("name", "reference")).replace("mainnet-", ""), "BlueSmall.TLabel")
+            self._set_label(self.reference_name, str(ref.get("name", "reference")), "BlueSmall.TLabel")
         else:
             self._set_label(self.reference_height, "STALE", "Bad.TLabel")
             self._set_label(self.reference_source, REFERENCE_SOURCE_LABEL, "BlueSmall.TLabel")
             self._set_label(self.reference_version, "—", "Bad.TLabel")
             self._set_label(self.reference_name, ref_error or "unavailable", "Bad.TLabel")
+
+    def _render_progress(self, rust_full: int, rust_headers: int, ref_full: int) -> None:
+        progress_headers = (rust_full / rust_headers * 100.0) if rust_headers else 0.0
+        progress_ref = (rust_full / ref_full * 100.0) if ref_full else 0.0
+
+        progress_headers = max(0.0, min(progress_headers, 100.0))
+        progress_ref = max(0.0, min(progress_ref, 100.0))
 
         self.headers_progress["value"] = progress_headers
         self.ref_progress["value"] = progress_ref
