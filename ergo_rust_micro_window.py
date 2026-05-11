@@ -563,8 +563,12 @@ class MicroWindow:
         network = str(rust.get("network", "—"))
         state_type = str(rust.get("stateType", "—")).upper()
 
+        text = f"RUST OK · {network} · {state_type} · {status_suffix}"
+        if uptime_seconds is None and not SSH_HOST_FOR_UPTIME:
+            text += " · UPTIME ?"
+
         self.status.configure(
-            text=f"RUST OK · {network} · {state_type} · {status_suffix}",
+            text=text,
             style="StatusOk.TLabel" if not ref_error else "StatusBad.TLabel",
         )
 
