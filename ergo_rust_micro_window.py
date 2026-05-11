@@ -55,7 +55,7 @@ REFRESH_MS = int(os.environ.get("ERGO_RUST_REFRESH_MS", "2000"))
 # For a remote node reached through an SSH tunnel, set:
 #   ERGO_RUST_UPTIME_SSH_HOST=your-host ./ergo_rust_micro_window.py
 SSH_HOST_FOR_UPTIME = os.environ.get("ERGO_RUST_UPTIME_SSH_HOST", "")
-SYSTEMD_SERVICE_NAME = "ergo-node-rust.service"
+SYSTEMD_SERVICE_NAME = os.environ.get("ERGO_RUST_SERVICE_NAME", "ergo-node-rust.service")
 
 
 def fetch_json(base_url: str, path: str = "/info", timeout: int = 2) -> dict[str, Any]:
