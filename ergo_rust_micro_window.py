@@ -548,22 +548,17 @@ class MicroWindow:
 
         rust_full = int(rust.get("fullHeight") or 0)
         rust_headers = int(rust.get("headersHeight") or 0)
-        rust_downloaded = int(rust.get("downloadedHeight") or 0)
-        peers = int(rust.get("peersCount") or 0)
-        mempool = int(rust.get("unconfirmedCount") or 0)
-        extraindex_value = detect_extraindex(rust)
-
-        self._update_rate(rust_full)
-
         ref_full = int(ref.get("fullHeight") or 0) if isinstance(ref, dict) else 0
         behind = max(ref_full - rust_full, 0) if ref_full else 0
 
-        progress_headers = (rust_full / rust_headers * 100.0) if rust_headers else 0.0
-        progress_ref = (rust_full / ref_full * 100.0) if ref_full else 0.0
+        self._update_rate(rust_full)
 
-        progress_headers = max(0.0, min(progress_headers, 100.0))
-        progress_ref = max(0.0, min(progress_ref, 100.0))
+        self._render_status(rust, ref_error, uptime_seconds)
+        self._render_rust(rust, uptime_seconds, behind)
+        self._render_reference(ref, ref_error)
+        self._render_progress(rust_full, rust_headers, ref_full)
 
+    def _render_status(self, rust: dict[str, Any], ref_error: str | None, uptime_seconds: int | None) -> None:
         status_suffix = "REF STALE" if ref_error else "REF OK"
         network = str(rust.get("network", "—"))
         state_type = str(rust.get("stateType", "—")).upper()
@@ -572,6 +567,14 @@ class MicroWindow:
             text=f"RUST OK · {network} · {state_type} · {status_suffix}",
             style="StatusOk.TLabel" if not ref_error else "StatusBad.TLabel",
         )
+
+    def _render_rust(self, rust: dict[str, Any], uptime_seconds: int | None, behind: int) -> None:
+        rust_full = int(rust.get("fullHeight") or 0)
+        rust_headers = int(rust.get("headersHeight") or 0)
+        rust_downloaded = int(rust.get("downloadedHeight") or 0)
+        peers = int(rust.get("peersCount") or 0)
+        mempool = int(rust.get("unconfirmedCount") or 0)
+        extraindex_value = detect_extraindex(rust)
 
         self._set_label(self.full_height, fmt_int(rust_full))
         self._set_label(self.headers, fmt_int(rust_headers))
@@ -597,7 +600,9 @@ class MicroWindow:
         self._set_label(self.eta, fmt_eta(behind, self.blocks_per_min), "BlueSmall.TLabel")
         self._set_label(self.node_kind, "mining" if rust.get("isMining") else "non-mining", "CardValueSmall.TLabel")
 
+    def _render_reference(self, ref: dict[str, Any] | None, ref_error: str | None) -> None:
         if isinstance(ref, dict):
+            ref_full = int(ref.get("fullHeight") or 0)
             self._set_label(self.reference_height, fmt_int(ref_full), "Blue.TLabel")
             self._set_label(self.reference_source, REFERENCE_SOURCE_LABEL, "BlueSmall.TLabel")
             self._set_label(self.reference_version, str(ref.get("appVersion", "—")), "BlueSmall.TLabel")
@@ -607,6 +612,13 @@ class MicroWindow:
             self._set_label(self.reference_source, REFERENCE_SOURCE_LABEL, "BlueSmall.TLabel")
             self._set_label(self.reference_version, "—", "Bad.TLabel")
             self._set_label(self.reference_name, ref_error or "unavailable", "Bad.TLabel")
+
+    def _render_progress(self, rust_full: int, rust_headers: int, ref_full: int) -> None:
+        progress_headers = (rust_full / rust_headers * 100.0) if rust_headers else 0.0
+        progress_ref = (rust_full / ref_full * 100.0) if ref_full else 0.0
+
+        progress_headers = max(0.0, min(progress_headers, 100.0))
+        progress_ref = max(0.0, min(progress_ref, 100.0))
 
         self.headers_progress["value"] = progress_headers
         self.ref_progress["value"] = progress_ref
