@@ -185,6 +185,25 @@ EOF_SERVICE
   echo "  systemctl --user status $TUNNEL_SERVICE_NAME"
 fi
 
+say "Optional: .desktop launcher"
+if ask_yes_no "Create a .desktop launcher in ~/.local/share/applications?" "n"; then
+  DESKTOP_DIR="$HOME/.local/share/applications"
+  DESKTOP_FILE="$DESKTOP_DIR/ergo-rust-sync-dashboard.desktop"
+  mkdir -p "$DESKTOP_DIR"
+  cat > "$DESKTOP_FILE" <<EOF_DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Ergo Rust Sync Dashboard
+Comment=Native sync monitor for ergo-node-rust
+Exec=$APP_DIR/run_micro_window.sh
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Utility;Network;Monitor;
+EOF_DESKTOP
+  chmod 644 "$DESKTOP_FILE"
+  echo "Created: $DESKTOP_FILE"
+fi
+
 say "Test configured Rust node API"
 if curl -fsS --max-time 5 "$NODE_URL/info" >/dev/null; then
   echo "Rust node API OK: $NODE_URL/info"
