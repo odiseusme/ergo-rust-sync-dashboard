@@ -34,8 +34,13 @@ import threading
 import time
 import urllib.request
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 from typing import Any
+
+
+FONT_SANS = ("Inter", "Cantarell", "DejaVu Sans", "Liberation Sans", "sans")
+FONT_MONO = ("Inter Mono", "DejaVu Sans Mono", "Liberation Mono", "monospace")
 
 
 # ExtraIndex is displayed only if the node API exposes extraIndex or extra_index.
@@ -384,10 +389,13 @@ class MicroWindow:
         self.config = config
         self.root = tk.Tk()
         self.root.title("ergo-node-rust sync")
-        self.root.minsize(660, 330)
+        self.root.minsize(640, 680)
 
         self.theme_name = config["theme"] if config.get("theme") in THEMES else "dark"
         self.theme = THEMES[self.theme_name]
+
+        self.font_sans = self._resolve_font_family(FONT_SANS)
+        self.font_mono = self._resolve_font_family(FONT_MONO)
 
         self.root.configure(bg=self.theme["bg_window"])
 
@@ -401,10 +409,23 @@ class MicroWindow:
         self.cached_uptime: int | None = None
         self.refresh_in_flight = False
 
+        # Hero zone state for redraws on theme change.
+        self.hero_state_key: str = "starting"
+        self.hero_progress: float = 0.0
+
         self._setup_style()
         self._build_ui()
         self._fit_window_to_content()
         self._refresh()
+
+    @staticmethod
+    def _resolve_font_family(candidates: tuple[str, ...]) -> str:
+        """Return the first available font family from candidates."""
+        available = set(tkfont.families())
+        for name in candidates:
+            if name in available:
+                return name
+        return candidates[-1]
 
     def _setup_style(self) -> None:
         t = self.theme
@@ -413,8 +434,22 @@ class MicroWindow:
 
         style.configure("Root.TFrame", background=t["bg_window"])
         style.configure("Header.TFrame", background=t["bg_window"])
+        style.configure("Hero.TFrame", background=t["bg_window"])
         style.configure("Group.TFrame", background=t["bg_card"], relief="flat")
         style.configure("Card.TFrame", background=t["bg_card"], relief="flat")
+
+        style.configure(
+            "HeroState.TLabel",
+            background=t["bg_window"],
+            foreground=t["state_starting"],
+            font=(self.font_sans, 26, "bold"),
+        )
+        style.configure(
+            "HeroSubtitle.TLabel",
+            background=t["bg_window"],
+            foreground=t["text_secondary"],
+            font=(self.font_sans, 12),
+        )
 
         style.configure(
             "Title.TLabel",
@@ -540,6 +575,7 @@ class MicroWindow:
     def _build_ui(self) -> None:
         outer = ttk.Frame(self.root, style="Root.TFrame", padding=10)
         outer.pack(fill="both", expand=True)
+        self._outer = outer
 
         top = ttk.Frame(outer, style="Header.TFrame")
         top.pack(fill="x")
@@ -552,8 +588,7 @@ class MicroWindow:
             style="TCheckbutton",
         ).pack(side="right")
 
-        self.status = ttk.Label(outer, text="starting…", style="Sub.TLabel")
-        self.status.pack(anchor="w", pady=(2, 8))
+        self._build_hero(outer)
 
         body = ttk.Frame(outer, style="Root.TFrame")
         body.pack(fill="both", expand=True)
@@ -624,6 +659,109 @@ class MicroWindow:
             style="Horizontal.TProgressbar",
         )
         self.ref_progress.pack(fill="x", pady=(2, 0))
+
+    def _build_hero(self, parent: tk.Widget) -> None:
+        """Hero zone: large ring + state label + subtitle."""
+        hero = ttk.Frame(parent, style="Hero.TFrame", padding=(14, 14, 14, 18))
+        hero.pack(fill="x")
+
+        self.hero_ring = tk.Canvas(
+            hero,
+            width=80,
+            height=80,
+            bg=self.theme["bg_window"],
+            highlightthickness=0,
+            bd=0,
+        )
+        self.hero_ring.pack(side="left", padx=(0, 16))
+
+        text_block = ttk.Frame(hero, style="Hero.TFrame")
+        text_block.pack(side="left", fill="both", expand=True)
+
+        self.hero_state_label = ttk.Label(
+            text_block,
+            text="Starting",
+            style="HeroState.TLabel",
+            anchor="w",
+        )
+        self.hero_state_label.pack(anchor="w", pady=(8, 0))
+
+        self.hero_subtitle = ttk.Label(
+            text_block,
+            text="warming up",
+            style="HeroSubtitle.TLabel",
+            anchor="w",
+        )
+        self.hero_subtitle.pack(anchor="w", pady=(2, 0))
+
+        # 0.5px separator below the hero block.
+        self.hero_separator = tk.Frame(
+            parent,
+            height=1,
+            bg=self.theme["border"],
+            bd=0,
+            highlightthickness=0,
+        )
+        self.hero_separator.pack(fill="x", pady=(0, 8))
+
+        self._redraw_ring("starting", 0.0)
+
+    def _redraw_ring(self, state_key: str, progress_percent: float) -> None:
+        """Render the hero ring for the given state."""
+        if not hasattr(self, "hero_ring"):
+            return
+
+        c = self.hero_ring
+        t = self.theme
+        c.configure(bg=t["bg_window"])
+        c.delete("all")
+
+        size = 80
+        stroke = 4.5
+        inset = stroke / 2 + 1
+        x0, y0, x1, y1 = inset, inset, size - inset, size - inset
+
+        # Outer track.
+        c.create_oval(x0, y0, x1, y1, outline=t["track"], width=stroke)
+
+        state_color = t.get(f"state_{state_key}", t["state_starting"])
+
+        if state_key == "offline":
+            center_text = "—"
+            center_color = state_color
+        else:
+            extent = -360 * max(0.0, min(progress_percent / 100.0, 1.0))
+            arc_color = t["text_muted"] if state_key == "starting" else state_color
+            if state_key == "synced":
+                # Drawing an arc of exactly 360 produces nothing in Tk; use an
+                # oval for the closed ring instead.
+                c.create_oval(x0, y0, x1, y1, outline=arc_color, width=stroke)
+            elif extent != 0:
+                c.create_arc(
+                    x0, y0, x1, y1,
+                    start=90,
+                    extent=extent,
+                    style=tk.ARC,
+                    outline=arc_color,
+                    width=stroke,
+                )
+
+            if state_key == "starting" and progress_percent <= 0:
+                center_text = "—"
+            else:
+                center_text = f"{progress_percent:.1f}%"
+            center_color = state_color
+
+        c.create_text(
+            size / 2,
+            size / 2,
+            text=center_text,
+            fill=center_color,
+            font=(self.font_mono, 13),
+        )
+
+        self.hero_state_key = state_key
+        self.hero_progress = progress_percent
 
     def _fit_window_to_content(self) -> None:
         """Open large enough to show all widgets without clipping."""
@@ -723,24 +861,30 @@ class MicroWindow:
 
         self._update_rate(rust_full)
 
-        self._render_status(rust, ref_error, uptime_seconds)
+        self._render_hero(rust, ref, uptime_seconds, ref_error)
         self._render_rust(rust, uptime_seconds, behind)
         self._render_reference(ref, ref_error)
         self._render_progress(rust_full, rust_headers, ref_full)
 
-    def _render_status(self, rust: dict[str, Any], ref_error: str | None, uptime_seconds: int | None) -> None:
-        status_suffix = "REF STALE" if ref_error else "REF OK"
-        network = str(rust.get("network", "—"))
-        state_type = str(rust.get("stateType", "—")).upper()
-
-        text = f"RUST OK · {network} · {state_type} · {status_suffix}"
-        if uptime_seconds is None and not self.config["uptime_ssh_host"]:
-            text += " · UPTIME ?"
-
-        self.status.configure(
-            text=text,
-            style="StatusOk.TLabel" if not ref_error else "StatusBad.TLabel",
+    def _render_hero(
+        self,
+        rust: dict[str, Any] | None,
+        ref: dict[str, Any] | None,
+        uptime_seconds: int | None,
+        ref_error: str | None,
+    ) -> None:
+        state_key, state_label, state_subtitle, progress = compute_health_state(
+            rust,
+            ref,
+            uptime_seconds,
+            ref_error,
+            self.blocks_per_min,
+            peers_min=self.config["peers_min"],
         )
+        state_color = self.theme.get(f"state_{state_key}", self.theme["state_starting"])
+        self.hero_state_label.configure(text=state_label, foreground=state_color)
+        self.hero_subtitle.configure(text=state_subtitle)
+        self._redraw_ring(state_key, progress)
 
     def _render_rust(self, rust: dict[str, Any], uptime_seconds: int | None, behind: int) -> None:
         rust_full = int(rust.get("fullHeight") or 0)
@@ -801,7 +945,10 @@ class MicroWindow:
 
     def _apply_refresh_error(self, error: str) -> None:
         self.refresh_in_flight = False
-        self.status.configure(text=f"STALE · Rust node refresh failed: {error}", style="StatusBad.TLabel")
+        offline_color = self.theme["state_offline"]
+        self.hero_state_label.configure(text="Offline", foreground=offline_color)
+        self.hero_subtitle.configure(text=f"refresh failed: {error}")
+        self._redraw_ring("offline", 0.0)
         self._set_label(self.peers, "ERR", "Bad.TLabel")
 
     def _refresh_worker(self) -> None:
