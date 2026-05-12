@@ -2,7 +2,7 @@
 
 A small native Python/Tkinter sync monitor for `ergo-node-rust`. Shows Rust node sync status alongside a reference Ergo node - no browser required.
 
-> **Status:** early. Code-quality pass and UI overhaul in progress.
+> **Status:** working. Dark/light themes, native Tk, MIT-licensed.
 
 ## Requirements
 
@@ -63,9 +63,14 @@ Both prompts default to "no" and are independent of the SSH-tunnel option.
 
 See `.env.example` for supported environment variables.
 
-## Suggested upstream placement
+## Integration with ergo-node-rust
 
-If integrated into the `ergo-node-rust` project, the natural home is `tools/micro-display/`.
+This is a community tool. Two lightweight options if upstream wants to bundle or reference it:
+
+- Link from the upstream README as a community contribution
+- Vendor as a `tools/` subfolder in `ergo-node-rust`
+
+Either works.
 
 ## License
 
