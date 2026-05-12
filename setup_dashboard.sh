@@ -185,6 +185,51 @@ EOF_SERVICE
   echo "  systemctl --user status $TUNNEL_SERVICE_NAME"
 fi
 
+say "Optional: .desktop launcher"
+if ask_yes_no "Create a .desktop launcher in ~/.local/share/applications?" "n"; then
+  DESKTOP_DIR="$HOME/.local/share/applications"
+  DESKTOP_FILE="$DESKTOP_DIR/ergo-rust-sync-dashboard.desktop"
+  mkdir -p "$DESKTOP_DIR"
+  cat > "$DESKTOP_FILE" <<EOF_DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Ergo Rust Sync Dashboard
+Comment=Native sync monitor for ergo-node-rust
+Exec=$APP_DIR/run_micro_window.sh
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Utility;Network;Monitor;
+EOF_DESKTOP
+  chmod 644 "$DESKTOP_FILE"
+  echo "Created: $DESKTOP_FILE"
+fi
+
+say "Optional: autostart on login"
+if ask_yes_no "Create a user systemd unit to autostart the dashboard on login?" "n"; then
+  DASH_SVC_DIR="$HOME/.config/systemd/user"
+  DASH_SVC_FILE="$DASH_SVC_DIR/ergo-rust-sync-dashboard.service"
+  mkdir -p "$DASH_SVC_DIR"
+  cat > "$DASH_SVC_FILE" <<EOF_DASH
+[Unit]
+Description=Ergo Rust Sync Dashboard
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=$APP_DIR/run_micro_window.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=graphical-session.target
+EOF_DASH
+  systemctl --user daemon-reload
+  systemctl --user enable ergo-rust-sync-dashboard.service
+  echo "Created and enabled: ergo-rust-sync-dashboard.service"
+  echo "It will start on next login. To start now: systemctl --user start ergo-rust-sync-dashboard.service"
+fi
+
 say "Test configured Rust node API"
 if curl -fsS --max-time 5 "$NODE_URL/info" >/dev/null; then
   echo "Rust node API OK: $NODE_URL/info"

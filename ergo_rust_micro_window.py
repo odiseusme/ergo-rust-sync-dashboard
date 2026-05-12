@@ -26,6 +26,7 @@ Note:
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -33,29 +34,55 @@ import threading
 import time
 import urllib.request
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 from typing import Any
 
 
-# Runtime config. Defaults support a local dashboard reading a local/tunneled node.
-NODE_URL = os.environ.get("ERGO_RUST_NODE_URL", "http://127.0.0.1:9052")
-REFERENCE_URL = os.environ.get("ERGO_RUST_REFERENCE_URL", "http://159.89.116.15:11088")
-REFERENCE_SOURCE_LABEL = os.environ.get(
-    "ERGO_RUST_REFERENCE_LABEL",
-    REFERENCE_URL.replace("http://", "").replace("https://", "").rstrip("/"),
-)
+FONT_SANS = ("Inter", "Cantarell", "DejaVu Sans", "Liberation Sans", "sans")
+FONT_MONO = ("Inter Mono", "DejaVu Sans Mono", "Liberation Mono", "monospace")
 
-REFRESH_MS = int(os.environ.get("ERGO_RUST_REFRESH_MS", "2000"))
 
 # ExtraIndex is displayed only if the node API exposes extraIndex or extra_index.
 
-# Optional: used to display Rust service uptime.
-# If empty, the display first tries local systemd, which works when the node
-# service runs on the same machine as the display.
-# For a remote node reached through an SSH tunnel, set:
-#   ERGO_RUST_UPTIME_SSH_HOST=your-host ./ergo_rust_micro_window.py
-SSH_HOST_FOR_UPTIME = os.environ.get("ERGO_RUST_UPTIME_SSH_HOST", "")
-SYSTEMD_SERVICE_NAME = os.environ.get("ERGO_RUST_SERVICE_NAME", "ergo-node-rust.service")
+# Service-uptime probing:
+# - If config["uptime_ssh_host"] is set, probe the remote host over SSH.
+# - Otherwise, try local systemd. That works when the node service runs on the
+#   same machine as the display.
+
+
+THEMES: dict[str, dict[str, str]] = {
+    "dark": {
+        "bg_window": "#1a1814",
+        "bg_card": "#252220",
+        "text_primary": "#f0eee5",
+        "text_secondary": "#b8b0a0",
+        "text_muted": "#7a7268",
+        "accent": "#d97757",
+        "state_synced": "#7ba87b",
+        "state_syncing": "#d99c5a",
+        "state_slow": "#c97870",
+        "state_offline": "#5e5852",
+        "state_starting": "#b8b0a0",
+        "border": "#2a2724",
+        "track": "#2d2a26",
+    },
+    "light": {
+        "bg_window": "#faf7f2",
+        "bg_card": "#f1ece2",
+        "text_primary": "#2a2520",
+        "text_secondary": "#5a5048",
+        "text_muted": "#8a7e72",
+        "accent": "#c45a3a",
+        "state_synced": "#4f7a4f",
+        "state_syncing": "#a8714a",
+        "state_slow": "#9a4f3e",
+        "state_offline": "#b0aa9e",
+        "state_starting": "#5a5048",
+        "border": "#ddd5c5",
+        "track": "#e0d8c8",
+    },
+}
 
 
 def fetch_json(base_url: str, path: str = "/info", timeout: int = 2) -> dict[str, Any]:
@@ -132,6 +159,72 @@ def parse_boolish(value: Any) -> bool | None:
     return None
 
 
+def compute_health_state(
+    rust: dict[str, Any] | None,
+    ref: dict[str, Any] | None,
+    uptime_seconds: int | None,
+    ref_error: str | None,
+    blocks_per_min: float | None,
+    peers_min: int = 1,
+) -> tuple[str, str, str, float]:
+    """Classify node health into one of five states.
+
+    Returns (state_key, state_label, state_subtitle, progress_percent).
+    state_key is one of: offline, starting, synced, slow, syncing.
+    First match wins; the order matters.
+    """
+    # 1. offline — no data from the Rust API
+    if not isinstance(rust, dict) or rust.get("fullHeight") is None:
+        return ("offline", "Offline", "unable to reach API", 0.0)
+
+    rust_full = int(rust.get("fullHeight") or 0)
+    peers = int(rust.get("peersCount") or 0)
+
+    ref_full = int(ref.get("fullHeight") or 0) if isinstance(ref, dict) else 0
+    behind = max(ref_full - rust_full, 0) if ref_full else 0
+
+    progress = 0.0
+    if ref_full:
+        progress = max(0.0, min(rust_full / ref_full * 100.0, 100.0))
+
+    # 2. starting — too early to score
+    if (uptime_seconds is not None and uptime_seconds < 60) or blocks_per_min is None:
+        return ("starting", "Starting", f"warming up · {peers} peers", progress)
+
+    # 3. slow — disconnected, or trailing the tip without speed to recover
+    if peers < peers_min:
+        return (
+            "slow",
+            "Slow",
+            f"{peers} peers · not connected",
+            progress,
+        )
+    if behind > 5 and blocks_per_min < 5:
+        return (
+            "slow",
+            "Slow",
+            f"behind {fmt_int(behind)} blocks · {fmt_rate(blocks_per_min)}",
+            progress,
+        )
+
+    # 4. synced — within touching distance of the tip (requires a reference)
+    if ref_full and behind <= 5:
+        return (
+            "synced",
+            "Synced",
+            f"block {fmt_int(rust_full)} · {peers} peers",
+            100.0,
+        )
+
+    # 5. syncing — fallback
+    return (
+        "syncing",
+        "Syncing",
+        f"eta {fmt_eta(behind, blocks_per_min)}",
+        progress,
+    )
+
+
 def detect_extraindex(info: dict[str, Any]) -> tuple[str, str]:
     for key in ("extraIndex", "extra_index"):
         if key in info:
@@ -158,33 +251,29 @@ def _parse_systemd_uptime_output(output: str) -> int | None:
     return int(max(0, uptime_seconds - active_enter_seconds))
 
 
-def _systemd_uptime_command() -> str:
+def _systemd_uptime_command(service_name: str) -> str:
     return (
-        f"systemctl show {SYSTEMD_SERVICE_NAME} "
+        f"systemctl show {service_name} "
         "--property=ActiveEnterTimestampMonotonic --value && "
         "cut -d' ' -f1 /proc/uptime"
     )
 
 
-def get_service_uptime_seconds() -> int | None:
-    """Return service uptime in seconds.
-
-    Behavior:
-    - If ERGO_RUST_UPTIME_SSH_HOST is set, probe the remote host over SSH.
-    - If it is not set, try local systemd. This works when the display and node
-      service run on the same machine.
-    - If local probing fails, return None; the UI renders that as "needs ssh".
-    """
-    if SSH_HOST_FOR_UPTIME:
+def get_service_uptime_seconds(ssh_host: str, service_name: str) -> int | None:
+    """Return service uptime in seconds, or None if probing failed."""
+    cmd_text = _systemd_uptime_command(service_name)
+    if ssh_host:
         cmd = [
             "ssh",
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
-            SSH_HOST_FOR_UPTIME,
-            _systemd_uptime_command(),
+            ssh_host,
+            cmd_text,
         ]
+        timeout = 8
     else:
-        cmd = ["bash", "-c", _systemd_uptime_command()]
+        cmd = ["bash", "-c", cmd_text]
+        timeout = 2
 
     try:
         result = subprocess.run(
@@ -193,36 +282,122 @@ def get_service_uptime_seconds() -> int | None:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=8 if SSH_HOST_FOR_UPTIME else 2,
+            timeout=timeout,
         )
         return _parse_systemd_uptime_output(result.stdout)
     except Exception:
         return None
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="ergo_rust_micro_window.py",
+        description="Native sync monitor for ergo-node-rust.",
+    )
+    parser.add_argument(
+        "--node-url",
+        default=None,
+        help="Rust node API URL. Overrides ERGO_RUST_NODE_URL.",
+    )
+    parser.add_argument(
+        "--reference-url",
+        default=None,
+        help="Reference Ergo node API URL. Overrides ERGO_RUST_REFERENCE_URL.",
+    )
+    parser.add_argument(
+        "--reference-label",
+        default=None,
+        help="Label shown in the UI for the reference source. Overrides ERGO_RUST_REFERENCE_LABEL.",
+    )
+    parser.add_argument(
+        "--refresh-ms",
+        type=int,
+        default=None,
+        help="Refresh interval in milliseconds. Overrides ERGO_RUST_REFRESH_MS.",
+    )
+    parser.add_argument(
+        "--uptime-ssh-host",
+        default=None,
+        help="SSH host alias used to probe remote service uptime. Overrides ERGO_RUST_UPTIME_SSH_HOST.",
+    )
+    parser.add_argument(
+        "--service-name",
+        default=None,
+        help="systemd unit name used for uptime probing. Overrides ERGO_RUST_SERVICE_NAME.",
+    )
+    parser.add_argument(
+        "--theme",
+        choices=sorted(THEMES.keys()),
+        default=None,
+        help="Initial color theme. Overrides ERGO_RUST_THEME.",
+    )
+    parser.add_argument(
+        "--peers-min",
+        type=int,
+        default=None,
+        help="Minimum healthy peer count. Below this the dashboard shows the Slow state. Overrides ERGO_RUST_PEERS_MIN.",
+    )
+    return parser.parse_args(argv)
+
+
+def load_config(args: argparse.Namespace) -> dict[str, Any]:
+    """Merge CLI args, environment variables, and built-in defaults.
+
+    Precedence: CLI > env > default.
+    """
+
+    def pick(arg_val: Any, env_key: str, default: str) -> str:
+        if arg_val is not None:
+            return str(arg_val)
+        env_val = os.environ.get(env_key, "")
+        if env_val:
+            return env_val
+        return default
+
+    node_url = pick(args.node_url, "ERGO_RUST_NODE_URL", "http://127.0.0.1:9052")
+    reference_url = pick(
+        args.reference_url, "ERGO_RUST_REFERENCE_URL", "http://159.89.116.15:11088"
+    )
+    derived_label = (
+        reference_url.replace("http://", "").replace("https://", "").rstrip("/")
+    )
+    reference_label = pick(args.reference_label, "ERGO_RUST_REFERENCE_LABEL", derived_label)
+    refresh_ms = int(pick(args.refresh_ms, "ERGO_RUST_REFRESH_MS", "2000"))
+    uptime_ssh_host = pick(args.uptime_ssh_host, "ERGO_RUST_UPTIME_SSH_HOST", "")
+    service_name = pick(args.service_name, "ERGO_RUST_SERVICE_NAME", "ergo-node-rust.service")
+    theme = pick(args.theme, "ERGO_RUST_THEME", "dark").strip().lower()
+    if theme not in THEMES:
+        theme = "dark"
+    peers_min = int(pick(args.peers_min, "ERGO_RUST_PEERS_MIN", "1"))
+    if peers_min < 0:
+        peers_min = 0
+
+    return {
+        "node_url": node_url,
+        "reference_url": reference_url,
+        "reference_label": reference_label,
+        "refresh_ms": refresh_ms,
+        "uptime_ssh_host": uptime_ssh_host,
+        "service_name": service_name,
+        "theme": theme,
+        "peers_min": peers_min,
+    }
+
+
 class MicroWindow:
-    def __init__(self) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.config = config
         self.root = tk.Tk()
         self.root.title("ergo-node-rust sync")
-        self.root.minsize(660, 330)
+        self.root.minsize(640, 480)
 
-        self.colors = {
-            "bg": "#5a2413",        # reddish rust background
-            "bg2": "#3d170c",
-            "group": "#1a0f0b",
-            "card": "#25140d",
-            "line": "#8f4a24",
-            "rust": "#ff8a3d",
-            "rust2": "#d7692f",
-            "text": "#f9ead8",
-            "muted": "#c7a891",
-            "ok": "#2ff08f",
-            "blue": "#48b8ff",
-            "bad": "#ff5264",
-            "bar_bg": "#120b08",
-        }
+        self.theme_name = config["theme"] if config.get("theme") in THEMES else "dark"
+        self.theme = THEMES[self.theme_name]
 
-        self.root.configure(bg=self.colors["bg"])
+        self.font_sans = self._resolve_font_family(FONT_SANS)
+        self.font_mono = self._resolve_font_family(FONT_MONO)
+
+        self.root.configure(bg=self.theme["bg_window"])
 
         self.always_on_top = tk.BooleanVar(value=False)
 
@@ -234,148 +409,204 @@ class MicroWindow:
         self.cached_uptime: int | None = None
         self.refresh_in_flight = False
 
+        # Hero zone state for redraws on theme change.
+        self.hero_state_key: str = "starting"
+        self.hero_progress: float = 0.0
+
+        # Non-ttk widgets whose `bg` follows a theme token. Each entry is
+        # (widget, theme_key); apply_theme iterates this list on swap.
+        self._themed_widgets: list[tuple[tk.Widget, str]] = []
+
         self._setup_style()
         self._build_ui()
         self._fit_window_to_content()
         self._refresh()
 
+    @staticmethod
+    def _resolve_font_family(candidates: tuple[str, ...]) -> str:
+        """Return the first available font family from candidates."""
+        available = set(tkfont.families())
+        for name in candidates:
+            if name in available:
+                return name
+        return candidates[-1]
+
+    def _track_themed(self, widget: tk.Widget, theme_key: str) -> tk.Widget:
+        """Register a non-ttk widget whose background follows a theme token.
+
+        ttk styles refresh themselves when _setup_style runs again. Plain
+        tk.Frame and tk.Canvas widgets do not — they keep whatever bg they
+        were created with — so we re-set them explicitly on theme change.
+        """
+        self._themed_widgets.append((widget, theme_key))
+        return widget
+
+    def apply_theme(self, name: str) -> None:
+        """Swap the active palette and repaint every theme-dependent surface."""
+        if name not in THEMES:
+            return
+        self.theme_name = name
+        self.theme = THEMES[name]
+        self.root.configure(bg=self.theme["bg_window"])
+
+        self._setup_style()
+
+        for widget, key in self._themed_widgets:
+            try:
+                widget.configure(bg=self.theme[key])
+            except tk.TclError:
+                pass
+
+        # Hero state label foreground is set per-state in _render_hero, so
+        # repaint it explicitly to match the new palette without waiting for
+        # the next refresh tick.
+        state_color = self.theme.get(
+            f"state_{self.hero_state_key}", self.theme["state_starting"]
+        )
+        if hasattr(self, "hero_state_label"):
+            self.hero_state_label.configure(foreground=state_color)
+
+        self._redraw_ring(self.hero_state_key, self.hero_progress)
+
+        if hasattr(self, "theme_toggle_button"):
+            self.theme_toggle_button.configure(text=self._theme_toggle_label())
+
+    def _theme_toggle_label(self) -> str:
+        """The button shows the name of the theme it would switch to."""
+        other = "light" if self.theme_name == "dark" else "dark"
+        return other.capitalize()
+
+    def _toggle_theme(self) -> None:
+        next_name = "light" if self.theme_name == "dark" else "dark"
+        self.apply_theme(next_name)
+
     def _setup_style(self) -> None:
-        c = self.colors
+        t = self.theme
         style = ttk.Style()
         style.theme_use("clam")
 
-        style.configure("Root.TFrame", background=c["bg"])
-        style.configure("Header.TFrame", background=c["bg"])
-        style.configure("Group.TFrame", background=c["group"], relief="flat")
-        style.configure("Card.TFrame", background=c["card"], relief="flat")
+        style.configure("Root.TFrame", background=t["bg_window"])
+        style.configure("Header.TFrame", background=t["bg_window"])
+        style.configure("Hero.TFrame", background=t["bg_window"])
+        style.configure("Card.TFrame", background=t["bg_card"], relief="flat")
 
         style.configure(
-            "Title.TLabel",
-            background=c["bg"],
-            foreground=c["text"],
-            font=("Sans", 18, "bold"),
+            "HeroState.TLabel",
+            background=t["bg_window"],
+            foreground=t["state_starting"],
+            font=(self.font_sans, 26, "bold"),
         )
         style.configure(
-            "RustTitle.TLabel",
-            background=c["bg"],
-            foreground=c["rust"],
-            font=("Sans", 18, "bold"),
+            "HeroSubtitle.TLabel",
+            background=t["bg_window"],
+            foreground=t["text_secondary"],
+            font=(self.font_sans, 12),
         )
         style.configure(
-            "Sub.TLabel",
-            background=c["bg"],
-            foreground=c["muted"],
-            font=("Sans", 9),
+            "SectionLabel.TLabel",
+            background=t["bg_window"],
+            foreground=t["text_muted"],
+            font=(self.font_sans, 10),
         )
         style.configure(
-            "GroupTitle.TLabel",
-            background=c["group"],
-            foreground=c["rust"],
-            font=("Sans", 12, "bold"),
+            "CardLabelV2.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_muted"],
+            font=(self.font_sans, 10),
         )
         style.configure(
-            "GroupSub.TLabel",
-            background=c["group"],
-            foreground=c["muted"],
-            font=("Sans", 9),
+            "CardValueMono.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_primary"],
+            font=(self.font_mono, 14),
         )
         style.configure(
-            "StatusOk.TLabel",
-            background=c["bg"],
-            foreground=c["ok"],
-            font=("Sans", 12, "bold"),
+            "CardValueText.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_primary"],
+            font=(self.font_sans, 14),
         )
         style.configure(
-            "StatusBad.TLabel",
-            background=c["bg"],
-            foreground=c["bad"],
-            font=("Sans", 12, "bold"),
+            "CardValueMuted.TLabel",
+            background=t["bg_card"],
+            foreground=t["text_muted"],
+            font=(self.font_sans, 14),
         )
         style.configure(
-            "CardLabel.TLabel",
-            background=c["card"],
-            foreground=c["muted"],
-            font=("Sans", 8),
+            "CardValueAccent.TLabel",
+            background=t["bg_card"],
+            foreground=t["accent"],
+            font=(self.font_sans, 14),
         )
         style.configure(
-            "CardValue.TLabel",
-            background=c["card"],
-            foreground=c["text"],
-            font=("Sans", 14, "bold"),
+            "CardValueSlow.TLabel",
+            background=t["bg_card"],
+            foreground=t["state_slow"],
+            font=(self.font_sans, 14),
         )
         style.configure(
-            "CardValueSmall.TLabel",
-            background=c["card"],
-            foreground=c["text"],
-            font=("Sans", 11, "bold"),
+            "Footer.TLabel",
+            background=t["bg_window"],
+            foreground=t["text_muted"],
+            font=(self.font_sans, 11),
         )
-        style.configure(
-            "Ok.TLabel",
-            background=c["card"],
-            foreground=c["ok"],
-            font=("Sans", 14, "bold"),
-        )
-        style.configure(
-            "Blue.TLabel",
-            background=c["card"],
-            foreground=c["blue"],
-            font=("Sans", 14, "bold"),
-        )
-        style.configure(
-            "BlueBig.TLabel",
-            background=c["card"],
-            foreground=c["blue"],
-            font=("Sans", 17, "bold"),
-        )
-        style.configure(
-            "BlueSmall.TLabel",
-            background=c["card"],
-            foreground=c["blue"],
-            font=("Sans", 11, "bold"),
-        )
-        style.configure(
-            "Rust.TLabel",
-            background=c["card"],
-            foreground=c["rust"],
-            font=("Sans", 14, "bold"),
-        )
-        style.configure(
-            "Bad.TLabel",
-            background=c["card"],
-            foreground=c["bad"],
-            font=("Sans", 14, "bold"),
-        )
-        style.configure(
-            "Horizontal.TProgressbar",
-            troughcolor=c["bar_bg"],
-            background=c["blue"],
-            bordercolor=c["line"],
-            lightcolor=c["blue"],
-            darkcolor=c["blue"],
-        )
+
         style.configure(
             "TCheckbutton",
-            background=c["bg"],
-            foreground=c["muted"],
-            font=("Sans", 9),
+            background=t["bg_window"],
+            foreground=t["text_secondary"],
+            font=(self.font_sans, 9),
+        )
+        style.configure(
+            "ThemeToggle.TButton",
+            background=t["bg_window"],
+            foreground=t["text_secondary"],
+            font=(self.font_sans, 9),
+            borderwidth=0,
+            focusthickness=0,
+            padding=(6, 2),
+            relief="flat",
+        )
+        style.map(
+            "ThemeToggle.TButton",
+            background=[("active", t["bg_card"]), ("pressed", t["bg_card"])],
+            foreground=[("active", t["text_primary"])],
         )
 
-    def _card(self, parent: tk.Widget, row: int, col: int, label: str, small: bool = False, colspan: int = 1) -> ttk.Label:
-        frame = ttk.Frame(parent, style="Card.TFrame", padding=(9, 7))
+    def _card(
+        self,
+        parent: tk.Widget,
+        row: int,
+        col: int,
+        label: str,
+        mono: bool = True,
+        colspan: int = 1,
+    ) -> ttk.Label:
+        frame = ttk.Frame(parent, style="Card.TFrame", padding=(12, 10))
         frame.grid(row=row, column=col, columnspan=colspan, sticky="nsew", padx=4, pady=4)
 
-        ttk.Label(frame, text=label, style="CardLabel.TLabel").pack(anchor="w")
-        value_style = "CardValueSmall.TLabel" if small else "CardValue.TLabel"
+        ttk.Label(frame, text=label, style="CardLabelV2.TLabel").pack(anchor="w")
+        value_style = "CardValueMono.TLabel" if mono else "CardValueText.TLabel"
         value = ttk.Label(frame, text="—", style=value_style)
-        value.pack(anchor="w", pady=(2, 0))
+        value.pack(anchor="w", pady=(4, 0))
         return value
 
     def _build_ui(self) -> None:
         outer = ttk.Frame(self.root, style="Root.TFrame", padding=10)
         outer.pack(fill="both", expand=True)
+        self._outer = outer
 
         top = ttk.Frame(outer, style="Header.TFrame")
         top.pack(fill="x")
+
+        self.theme_toggle_button = ttk.Button(
+            top,
+            text=self._theme_toggle_label(),
+            style="ThemeToggle.TButton",
+            command=self._toggle_theme,
+            takefocus=False,
+        )
+        self.theme_toggle_button.pack(side="right", padx=(8, 0))
 
         ttk.Checkbutton(
             top,
@@ -385,98 +616,218 @@ class MicroWindow:
             style="TCheckbutton",
         ).pack(side="right")
 
-        self.status = ttk.Label(outer, text="starting…", style="Sub.TLabel")
-        self.status.pack(anchor="w", pady=(2, 8))
+        self._build_hero(outer)
+        self._build_rust_grid(outer)
+        self._build_reference(outer)
+        self._build_footer(outer)
 
-        body = ttk.Frame(outer, style="Root.TFrame")
-        body.pack(fill="both", expand=True)
-        body.columnconfigure(0, weight=3)
-        body.columnconfigure(1, weight=2)
+    def _build_rust_grid(self, parent: tk.Widget) -> None:
+        """Rust node section: section label + 3x3 card grid."""
+        ttk.Label(
+            parent, text="Rust node", style="SectionLabel.TLabel",
+        ).pack(anchor="w", pady=(16, 8))
 
-        rust_group = ttk.Frame(body, style="Group.TFrame", padding=10)
-        rust_group.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        rust_group.columnconfigure(0, weight=1)
-        rust_group.columnconfigure(1, weight=1)
-        rust_group.columnconfigure(2, weight=1)
+        grid = ttk.Frame(parent, style="Root.TFrame")
+        grid.pack(fill="x")
+        for c in range(3):
+            grid.columnconfigure(c, weight=1, uniform="rustcol")
 
-        ref_group = ttk.Frame(body, style="Group.TFrame", padding=10)
-        ref_group.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-        ref_group.columnconfigure(0, weight=1)
-        ref_group.columnconfigure(1, weight=1)
+        # Row 1: Full / Headers / Downloaded
+        self.full_height = self._card(grid, 0, 0, "Full")
+        self.headers = self._card(grid, 0, 1, "Headers")
+        self.downloaded = self._card(grid, 0, 2, "Downloaded")
 
-        ttk.Label(rust_group, text="RUST NODE", style="GroupTitle.TLabel").grid(
-            row=0, column=0, columnspan=3, sticky="w", pady=(0, 4)
+        # Row 2: Peers / Mempool / Uptime
+        self.peers = self._card(grid, 1, 0, "Peers")
+        self.mempool = self._card(grid, 1, 1, "Mempool")
+        self.uptime = self._card(grid, 1, 2, "Uptime", mono=False)
+
+        # Row 3: Mining / Extra index / Version
+        self.mining = self._card(grid, 2, 0, "Mining", mono=False)
+        self.extraindex = self._card(grid, 2, 1, "Extra index", mono=False)
+        self.version = self._card(grid, 2, 2, "Version", mono=False)
+
+    def _build_reference(self, parent: tk.Widget) -> None:
+        """Reference node: full-width card matching the Rust card pattern.
+
+        Label on top, value below. The value row is justified: the block
+        height anchors the left edge (to compare with the Rust Full card
+        directly above), the node name anchors the right. Layout:
+
+            Reference
+            block <height>                                   <name>
+
+        No fixed pixel widths anywhere — the inline row uses fill=x so
+        the empty middle absorbs slack as the window resizes.
+        """
+        card = ttk.Frame(parent, style="Card.TFrame", padding=(12, 10))
+        card.pack(fill="x", expand=True, padx=4, pady=(8, 0))
+
+        ttk.Label(card, text="Reference", style="CardLabelV2.TLabel").pack(anchor="w")
+
+        inline = ttk.Frame(card, style="Card.TFrame")
+        inline.pack(fill="x", expand=True, pady=(4, 0))
+
+        # Pack the right side first so the name anchors the right edge
+        # without being squeezed by anything on the left.
+        self.ref_name_label = ttk.Label(inline, text="—", style="CardValueMuted.TLabel")
+        self.ref_name_label.pack(side="right")
+
+        self.ref_block_label = ttk.Label(inline, text="block ", style="CardValueText.TLabel")
+        self.ref_block_label.pack(side="left")
+        self.ref_height_label = ttk.Label(inline, text="—", style="CardValueMuted.TLabel")
+        self.ref_height_label.pack(side="left")
+
+        # Widgets that toggle visibility when ref goes stale.
+        self._ref_live_widgets = (
+            self.ref_block_label,
+            self.ref_height_label,
+            self.ref_name_label,
         )
 
-        self.full_height = self._card(rust_group, 1, 0, "Full")
-        self.headers = self._card(rust_group, 1, 1, "Headers")
-        self.downloaded = self._card(rust_group, 1, 2, "Downloaded")
-
-        self.peers = self._card(rust_group, 2, 0, "Peers")
-        self.mempool = self._card(rust_group, 2, 1, "Mempool")
-        self.uptime = self._card(rust_group, 2, 2, "Uptime", small=True)
-
-        self.mining = self._card(rust_group, 3, 0, "Mining")
-        self.extraindex = self._card(rust_group, 3, 1, "ExtraIndex")
-        self.version = self._card(rust_group, 3, 2, "Version", small=True)
-
-        self.rate = self._card(rust_group, 4, 0, "Speed", small=True)
-        self.eta = self._card(rust_group, 4, 1, "ETA to tip", small=True)
-        self.node_kind = self._card(rust_group, 4, 2, "Role", small=True)
-
-        ttk.Label(ref_group, text="REFERENCE NODE", style="GroupTitle.TLabel").grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 4)
+        # Shown only when ref is stale; hidden initially.
+        self.ref_stale_label = ttk.Label(
+            inline, text="unavailable", style="CardValueSlow.TLabel",
         )
 
-        self.reference_height = self._card(ref_group, 1, 0, "Height", colspan=2)
-        self.reference_source = self._card(ref_group, 2, 0, "Source", small=True, colspan=2)
-        self.reference_version = self._card(ref_group, 3, 0, "Version", small=True, colspan=2)
-        self.reference_name = self._card(ref_group, 4, 0, "Name", small=True, colspan=2)
+    def _build_footer(self, parent: tk.Widget) -> None:
+        """Footer: small refresh-cadence status line."""
+        seconds = self.config["refresh_ms"] / 1000.0
+        text = f"auto-refresh {seconds:.0f}s"
+        self.footer_label = ttk.Label(parent, text=text, style="Footer.TLabel")
+        self.footer_label.pack(anchor="e", pady=(12, 0))
 
-        bars = ttk.Frame(outer, style="Root.TFrame")
-        bars.pack(fill="x", pady=(8, 0))
+    def _build_hero(self, parent: tk.Widget) -> None:
+        """Hero zone: large ring + state label + subtitle."""
+        hero = ttk.Frame(parent, style="Hero.TFrame", padding=(14, 14, 14, 18))
+        hero.pack(fill="x")
 
-        self.headers_progress_label = ttk.Label(bars, text="Known headers: —", style="Sub.TLabel")
-        self.headers_progress_label.pack(anchor="w")
-        self.headers_progress = ttk.Progressbar(
-            bars,
-            orient="horizontal",
-            mode="determinate",
-            maximum=100,
-            style="Horizontal.TProgressbar",
+        self.hero_ring = tk.Canvas(
+            hero,
+            width=80,
+            height=80,
+            bg=self.theme["bg_window"],
+            highlightthickness=0,
+            bd=0,
         )
-        self.headers_progress.pack(fill="x", pady=(2, 6))
+        self._track_themed(self.hero_ring, "bg_window")
+        self.hero_ring.pack(side="left", padx=(0, 16))
 
-        self.ref_progress_label = ttk.Label(bars, text="Network tip: —", style="Sub.TLabel")
-        self.ref_progress_label.pack(anchor="w")
-        self.ref_progress = ttk.Progressbar(
-            bars,
-            orient="horizontal",
-            mode="determinate",
-            maximum=100,
-            style="Horizontal.TProgressbar",
+        text_block = ttk.Frame(hero, style="Hero.TFrame")
+        text_block.pack(side="left", fill="both", expand=True)
+
+        self.hero_state_label = ttk.Label(
+            text_block,
+            text="Starting",
+            style="HeroState.TLabel",
+            anchor="w",
         )
-        self.ref_progress.pack(fill="x", pady=(2, 0))
+        self.hero_state_label.pack(anchor="w", pady=(8, 0))
+
+        self.hero_subtitle = ttk.Label(
+            text_block,
+            text="warming up",
+            style="HeroSubtitle.TLabel",
+            anchor="w",
+        )
+        self.hero_subtitle.pack(anchor="w", pady=(2, 0))
+
+        # 0.5px separator below the hero block.
+        self.hero_separator = tk.Frame(
+            parent,
+            height=1,
+            bg=self.theme["border"],
+            bd=0,
+            highlightthickness=0,
+        )
+        self._track_themed(self.hero_separator, "border")
+        self.hero_separator.pack(fill="x", pady=(0, 8))
+
+        self._redraw_ring("starting", 0.0)
+
+    def _redraw_ring(self, state_key: str, progress_percent: float) -> None:
+        """Render the hero ring for the given state."""
+        if not hasattr(self, "hero_ring"):
+            return
+
+        c = self.hero_ring
+        t = self.theme
+        c.configure(bg=t["bg_window"])
+        c.delete("all")
+
+        size = 80
+        stroke = 4.5
+        inset = stroke / 2 + 1
+        x0, y0, x1, y1 = inset, inset, size - inset, size - inset
+
+        # Outer track.
+        c.create_oval(x0, y0, x1, y1, outline=t["track"], width=stroke)
+
+        state_color = t.get(f"state_{state_key}", t["state_starting"])
+
+        if state_key == "offline":
+            center_text = "—"
+            center_color = state_color
+        else:
+            extent = -360 * max(0.0, min(progress_percent / 100.0, 1.0))
+            arc_color = t["text_muted"] if state_key == "starting" else state_color
+            if state_key == "synced":
+                # Drawing an arc of exactly 360 produces nothing in Tk; use an
+                # oval for the closed ring instead.
+                c.create_oval(x0, y0, x1, y1, outline=arc_color, width=stroke)
+            elif extent != 0:
+                c.create_arc(
+                    x0, y0, x1, y1,
+                    start=90,
+                    extent=extent,
+                    style=tk.ARC,
+                    outline=arc_color,
+                    width=stroke,
+                )
+
+            if state_key == "starting" and progress_percent <= 0:
+                center_text = "—"
+            else:
+                center_text = f"{progress_percent:.1f}%"
+            center_color = state_color
+
+        c.create_text(
+            size / 2,
+            size / 2,
+            text=center_text,
+            fill=center_color,
+            font=(self.font_mono, 13),
+        )
+
+        self.hero_state_key = state_key
+        self.hero_progress = progress_percent
 
     def _fit_window_to_content(self) -> None:
-        """Open large enough to show all widgets without clipping."""
+        """Open the window at the size its packed children request.
+
+        Without this, Tk picks an initial geometry that can clip the
+        bottom-most widgets (Progress bars, Footer) on first paint. We let
+        every child publish its requested size first, then set the geometry
+        to that — floored at the minsize, capped at the screen size so we
+        never open larger than the display.
+        """
         self.root.update_idletasks()
 
-        requested_width = self.root.winfo_reqwidth()
-        requested_height = self.root.winfo_reqheight()
+        width = max(640, self.root.winfo_reqwidth())
+        height = max(480, self.root.winfo_reqheight())
 
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
+        screen_width = self.root.winfo_screenwidth() - 80
+        screen_height = self.root.winfo_screenheight() - 80
 
-        width = min(max(720, requested_width + 20), screen_width - 80)
-        height = min(max(520, requested_height + 20), screen_height - 80)
+        width = min(width, screen_width)
+        height = min(height, screen_height)
 
         self.root.geometry(f"{width}x{height}")
 
     def _toggle_top(self) -> None:
         self.root.attributes("-topmost", bool(self.always_on_top.get()))
 
-    def _set_label(self, label: ttk.Label, text: str, style: str = "CardValue.TLabel") -> None:
+    def _set_label(self, label: ttk.Label, text: str, style: str = "CardValueMono.TLabel") -> None:
         label.configure(text=text, style=style)
 
     def _update_rate(self, full_height: int) -> None:
@@ -489,7 +840,7 @@ class MicroWindow:
             # drop). The block delta then represents catch-up, not steady-state
             # sync speed, so we reset the baseline instead of folding the burst
             # into the EWMA.
-            if delta_minutes > 3 * (REFRESH_MS / 60000.0):
+            if delta_minutes > 3 * (self.config["refresh_ms"] / 60000.0):
                 self.last_full_height = full_height
                 self.last_sample_time = now
                 return
@@ -511,7 +862,10 @@ class MicroWindow:
         """
         now = time.monotonic()
         if now - self.last_uptime_check > 15:
-            self.cached_uptime = get_service_uptime_seconds()
+            self.cached_uptime = get_service_uptime_seconds(
+                self.config["uptime_ssh_host"],
+                self.config["service_name"],
+            )
             self.last_uptime_check = now
         return self.cached_uptime
 
@@ -522,12 +876,12 @@ class MicroWindow:
         fails, the Rust node display remains live and the reference panel is
         marked stale.
         """
-        rust = fetch_json(NODE_URL)
+        rust = fetch_json(self.config["node_url"])
 
         ref = None
         ref_error = None
         try:
-            ref = fetch_json(REFERENCE_URL, timeout=5)
+            ref = fetch_json(self.config["reference_url"], timeout=5)
         except Exception as e:
             ref_error = str(e)
 
@@ -547,30 +901,34 @@ class MicroWindow:
         uptime_seconds = snapshot.get("uptime_seconds")
 
         rust_full = int(rust.get("fullHeight") or 0)
-        rust_headers = int(rust.get("headersHeight") or 0)
         ref_full = int(ref.get("fullHeight") or 0) if isinstance(ref, dict) else 0
         behind = max(ref_full - rust_full, 0) if ref_full else 0
 
         self._update_rate(rust_full)
 
-        self._render_status(rust, ref_error, uptime_seconds)
+        self._render_hero(rust, ref, uptime_seconds, ref_error)
         self._render_rust(rust, uptime_seconds, behind)
         self._render_reference(ref, ref_error)
-        self._render_progress(rust_full, rust_headers, ref_full)
 
-    def _render_status(self, rust: dict[str, Any], ref_error: str | None, uptime_seconds: int | None) -> None:
-        status_suffix = "REF STALE" if ref_error else "REF OK"
-        network = str(rust.get("network", "—"))
-        state_type = str(rust.get("stateType", "—")).upper()
-
-        text = f"RUST OK · {network} · {state_type} · {status_suffix}"
-        if uptime_seconds is None and not SSH_HOST_FOR_UPTIME:
-            text += " · UPTIME ?"
-
-        self.status.configure(
-            text=text,
-            style="StatusOk.TLabel" if not ref_error else "StatusBad.TLabel",
+    def _render_hero(
+        self,
+        rust: dict[str, Any] | None,
+        ref: dict[str, Any] | None,
+        uptime_seconds: int | None,
+        ref_error: str | None,
+    ) -> None:
+        state_key, state_label, state_subtitle, progress = compute_health_state(
+            rust,
+            ref,
+            uptime_seconds,
+            ref_error,
+            self.blocks_per_min,
+            peers_min=self.config["peers_min"],
         )
+        state_color = self.theme.get(f"state_{state_key}", self.theme["state_starting"])
+        self.hero_state_label.configure(text=state_label, foreground=state_color)
+        self.hero_subtitle.configure(text=state_subtitle)
+        self._redraw_ring(state_key, progress)
 
     def _render_rust(self, rust: dict[str, Any], uptime_seconds: int | None, behind: int) -> None:
         rust_full = int(rust.get("fullHeight") or 0)
@@ -578,60 +936,99 @@ class MicroWindow:
         rust_downloaded = int(rust.get("downloadedHeight") or 0)
         peers = int(rust.get("peersCount") or 0)
         mempool = int(rust.get("unconfirmedCount") or 0)
-        extraindex_label, extraindex_style = detect_extraindex(rust)
 
-        self._set_label(self.full_height, fmt_int(rust_full))
-        self._set_label(self.headers, fmt_int(rust_headers))
-        self._set_label(self.downloaded, fmt_int(rust_downloaded))
+        self._set_label(self.full_height, fmt_int(rust_full), "CardValueMono.TLabel")
+        self._set_label(self.headers, fmt_int(rust_headers), "CardValueMono.TLabel")
+        self._set_label(self.downloaded, fmt_int(rust_downloaded), "CardValueMono.TLabel")
 
-        self._set_label(self.peers, fmt_int(peers), "Ok.TLabel" if peers > 0 else "Bad.TLabel")
-        self._set_label(self.mempool, fmt_int(mempool), "Blue.TLabel" if mempool > 0 else "Ok.TLabel")
-        self._set_label(self.version, str(rust.get("appVersion", "—")), "CardValueSmall.TLabel")
+        peers_style = "CardValueMono.TLabel" if peers > 0 else "CardValueSlow.TLabel"
+        self._set_label(self.peers, fmt_int(peers), peers_style)
+        self._set_label(self.mempool, fmt_int(mempool), "CardValueMono.TLabel")
+        self._set_label(self.version, str(rust.get("appVersion", "—")), "CardValueText.TLabel")
 
+        is_mining = bool(rust.get("isMining"))
         self._set_label(
             self.mining,
-            "ON" if rust.get("isMining") else "OFF",
-            "Rust.TLabel" if rust.get("isMining") else "Ok.TLabel",
+            "On" if is_mining else "Off",
+            "CardValueAccent.TLabel" if is_mining else "CardValueMuted.TLabel",
         )
-        self._set_label(self.extraindex, extraindex_label, extraindex_style)
-        self._set_label(self.uptime, fmt_duration(uptime_seconds) if uptime_seconds is not None else "needs ssh", "BlueSmall.TLabel")
+        extraindex_label, extraindex_value_style = self._extraindex_card_style(rust)
+        self._set_label(self.extraindex, extraindex_label, extraindex_value_style)
+        uptime_text, uptime_style = self._uptime_card_style(uptime_seconds)
+        self._set_label(self.uptime, uptime_text, uptime_style)
 
-        self._set_label(self.rate, fmt_rate(self.blocks_per_min), "BlueSmall.TLabel")
-        self._set_label(self.eta, fmt_eta(behind, self.blocks_per_min), "BlueSmall.TLabel")
-        self._set_label(self.node_kind, "mining" if rust.get("isMining") else "non-mining", "CardValueSmall.TLabel")
+    def _uptime_card_style(self, uptime_seconds: int | None) -> tuple[str, str]:
+        """Pick the (text, style) for the uptime card.
+
+        The ambiguous case is uptime_seconds=None: differentiate "SSH host not
+        configured" (so we never tried) from "SSH host configured but the
+        probe failed" (so something is wrong).
+        """
+        if uptime_seconds is not None:
+            return (fmt_duration(uptime_seconds), "CardValueText.TLabel")
+        if self.config["uptime_ssh_host"]:
+            return ("probe failed", "CardValueSlow.TLabel")
+        return ("needs ssh", "CardValueMuted.TLabel")
+
+    @staticmethod
+    def _extraindex_card_style(rust: dict[str, Any]) -> tuple[str, str]:
+        """Map detect_extraindex output onto the new card value styles."""
+        label, _ = detect_extraindex(rust)
+        if label == "ON":
+            return ("On", "CardValueAccent.TLabel")
+        if label == "OFF":
+            return ("Off", "CardValueMuted.TLabel")
+        if label == "N/A":
+            return ("n/a", "CardValueMuted.TLabel")
+        return ("unknown", "CardValueMuted.TLabel")
 
     def _render_reference(self, ref: dict[str, Any] | None, ref_error: str | None) -> None:
-        if isinstance(ref, dict):
-            ref_full = int(ref.get("fullHeight") or 0)
-            self._set_label(self.reference_height, fmt_int(ref_full), "Blue.TLabel")
-            self._set_label(self.reference_source, REFERENCE_SOURCE_LABEL, "BlueSmall.TLabel")
-            self._set_label(self.reference_version, str(ref.get("appVersion", "—")), "BlueSmall.TLabel")
-            self._set_label(self.reference_name, str(ref.get("name", "reference")), "BlueSmall.TLabel")
-        else:
-            self._set_label(self.reference_height, "STALE", "Bad.TLabel")
-            self._set_label(self.reference_source, REFERENCE_SOURCE_LABEL, "BlueSmall.TLabel")
-            self._set_label(self.reference_version, "—", "Bad.TLabel")
-            self._set_label(self.reference_name, ref_error or "unavailable", "Bad.TLabel")
+        if not isinstance(ref, dict):
+            for w in self._ref_live_widgets:
+                w.pack_forget()
+            self.ref_stale_label.configure(text="unavailable")
+            if not self.ref_stale_label.winfo_ismapped():
+                self.ref_stale_label.pack(side="left")
+            return
 
-    def _render_progress(self, rust_full: int, rust_headers: int, ref_full: int) -> None:
-        progress_headers = (rust_full / rust_headers * 100.0) if rust_headers else 0.0
-        progress_ref = (rust_full / ref_full * 100.0) if ref_full else 0.0
+        if self.ref_stale_label.winfo_ismapped():
+            self.ref_stale_label.pack_forget()
+        # Re-pack in the original justification: right side first, then left.
+        if not self.ref_name_label.winfo_ismapped():
+            self.ref_name_label.pack(side="right")
+        if not self.ref_block_label.winfo_ismapped():
+            self.ref_block_label.pack(side="left")
+        if not self.ref_height_label.winfo_ismapped():
+            self.ref_height_label.pack(side="left")
 
-        progress_headers = max(0.0, min(progress_headers, 100.0))
-        progress_ref = max(0.0, min(progress_ref, 100.0))
-
-        self.headers_progress["value"] = progress_headers
-        self.ref_progress["value"] = progress_ref
-
-        self.headers_progress_label.configure(text=f"Rust vs known headers: {progress_headers:.2f}%")
-        self.ref_progress_label.configure(
-            text=f"Rust vs network tip: {progress_ref:.2f}%" if ref_full else "Rust vs network tip: reference stale"
+        self._set_ref_segment(
+            self.ref_name_label,
+            str(ref.get("name")) if ref.get("name") else "",
+            mono=False,
         )
+
+        height_raw = ref.get("fullHeight")
+        try:
+            height_text = fmt_int(height_raw) if height_raw is not None else ""
+        except Exception:
+            height_text = ""
+        self._set_ref_segment(self.ref_height_label, height_text, mono=True)
+
+    def _set_ref_segment(self, label: ttk.Label, text: str, mono: bool) -> None:
+        """Drive a single inline reference segment, falling back to muted '—'."""
+        if text:
+            style = "CardValueMono.TLabel" if mono else "CardValueText.TLabel"
+            label.configure(text=text, style=style)
+        else:
+            label.configure(text="—", style="CardValueMuted.TLabel")
 
     def _apply_refresh_error(self, error: str) -> None:
         self.refresh_in_flight = False
-        self.status.configure(text=f"STALE · Rust node refresh failed: {error}", style="StatusBad.TLabel")
-        self._set_label(self.peers, "ERR", "Bad.TLabel")
+        offline_color = self.theme["state_offline"]
+        self.hero_state_label.configure(text="Offline", foreground=offline_color)
+        self.hero_subtitle.configure(text=f"refresh failed: {error}")
+        self._redraw_ring("offline", 0.0)
+        self._set_label(self.peers, "err", "CardValueSlow.TLabel")
 
     def _refresh_worker(self) -> None:
         try:
@@ -647,14 +1044,16 @@ class MicroWindow:
             self.refresh_in_flight = True
             threading.Thread(target=self._refresh_worker, daemon=True).start()
 
-        self.root.after(REFRESH_MS, self._refresh)
+        self.root.after(self.config["refresh_ms"], self._refresh)
 
     def run(self) -> None:
         self.root.mainloop()
 
 
 def main() -> None:
-    MicroWindow().run()
+    args = parse_args()
+    config = load_config(args)
+    MicroWindow(config).run()
 
 
 if __name__ == "__main__":
